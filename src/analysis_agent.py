@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+import weave
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -38,6 +39,13 @@ from screen_capture import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize Weave for tracking
+try:
+    weave.init("parental-control-agent")
+    logger.info("Weave initialized successfully")
+except Exception as e:
+    logger.warning(f"Weave initialization failed: {e}. Continuing without Weave tracking.")
+
 @dataclass
 class AnalysisResult:
     """Structured result from content analysis"""
@@ -64,63 +72,68 @@ class ApplicationContext:
     context_clues: List[str]
 
 class AnalysisCache:
-    """Simple cache for analysis results to improve performance"""
+    """High-performance cache for analysis results"""
     
     def __init__(self, cache_dir: str = "temp/analysis_cache", max_age_minutes: int = 30):
         self.cache_dir = Path(cache_dir)
+        self.max_age_minutes = max_age_minutes
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.max_age = timedelta(minutes=max_age_minutes)
     
+    @weave.op()
     def _get_cache_key(self, input_text: str, screenshot_path: Optional[str]) -> str:
-        """Generate cache key from input and screenshot"""
-        content = input_text or ""
-        if screenshot_path and os.path.exists(screenshot_path):
-            with open(screenshot_path, 'rb') as f:
-                content += f.read().hex()[:100]  # First 100 chars of hex
+        """Generate MD5 cache key from input"""
+        content = f"{input_text}:{screenshot_path or ''}"
         return hashlib.md5(content.encode()).hexdigest()
     
+    @weave.op()
     def get(self, input_text: str, screenshot_path: Optional[str]) -> Optional[AnalysisResult]:
         """Get cached analysis result"""
+        cache_key = self._get_cache_key(input_text, screenshot_path)
+        cache_file = self.cache_dir / f"{cache_key}.pkl"
+        
+        if not cache_file.exists():
+            return None
+        
+        # Check if cache is expired
+        file_age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
+        if file_age > timedelta(minutes=self.max_age_minutes):
+            cache_file.unlink(missing_ok=True)
+            return None
+        
         try:
-            cache_key = self._get_cache_key(input_text, screenshot_path)
-            cache_file = self.cache_dir / f"{cache_key}.pkl"
-            
-            if not cache_file.exists():
-                return None
-            
-            # Check if cache is still valid
-            if datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime) > self.max_age:
-                cache_file.unlink()  # Remove expired cache
-                return None
-            
             with open(cache_file, 'rb') as f:
                 return pickle.load(f)
         except Exception as e:
-            logger.warning(f"Cache read error: {e}")
+            logger.error(f"Cache read error: {e}")
+            cache_file.unlink(missing_ok=True)
             return None
     
+    @weave.op()
     def set(self, input_text: str, screenshot_path: Optional[str], result: AnalysisResult):
         """Cache analysis result"""
+        cache_key = self._get_cache_key(input_text, screenshot_path)
+        cache_file = self.cache_dir / f"{cache_key}.pkl"
+        
         try:
-            cache_key = self._get_cache_key(input_text, screenshot_path)
-            cache_file = self.cache_dir / f"{cache_key}.pkl"
-            
             with open(cache_file, 'wb') as f:
                 pickle.dump(result, f)
         except Exception as e:
-            logger.warning(f"Cache write error: {e}")
+            logger.error(f"Cache write error: {e}")
     
+    @weave.op()
     def cleanup_old_cache(self):
-        """Remove old cache files"""
-        try:
-            cutoff_time = datetime.now() - self.max_age
-            for cache_file in self.cache_dir.glob("*.pkl"):
-                if datetime.fromtimestamp(cache_file.stat().st_mtime) < cutoff_time:
+        """Clean up old cache files"""
+        cutoff_time = datetime.now() - timedelta(minutes=self.max_age_minutes)
+        
+        for cache_file in self.cache_dir.glob("*.pkl"):
+            try:
+                file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
+                if file_time < cutoff_time:
                     cache_file.unlink()
-        except Exception as e:
-            logger.warning(f"Cache cleanup error: {e}")
+            except Exception as e:
+                logger.error(f"Cache cleanup error: {e}")
 
-class AnalysisAgent:
+class AnalysisAgent(weave.Model):
     """
     Analysis Agent that coordinates content analysis using Gemini multimodal tool
     
@@ -132,37 +145,45 @@ class AnalysisAgent:
     5. Caches results for performance
     """
     
-    def __init__(self, 
-                 age_group: str = "elementary",
-                 strictness_level: str = "moderate",
-                 cache_enabled: bool = True):
-        self.age_group = age_group
-        self.strictness_level = strictness_level
-        self.cache_enabled = cache_enabled
+    age_group: str = "elementary"
+    strictness_level: str = "moderate"
+    cache_enabled: bool = True
+    cache: Optional[AnalysisCache] = None
+    gemini_tool: Optional[GeminiMultimodalAnalyzer] = None
+    stats: Optional[Dict[str, Any]] = None
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         
         # Initialize cache
-        if cache_enabled:
-            self.cache = AnalysisCache()
+        if self.cache_enabled:
+            object.__setattr__(self, 'cache', AnalysisCache())
         
         # Initialize tools
-        self.gemini_tool = GeminiMultimodalAnalyzer()
+        object.__setattr__(self, 'gemini_tool', GeminiMultimodalAnalyzer())
         
         # Analysis statistics
-        self.stats = {
+        object.__setattr__(self, 'stats', {
             'total_analyses': 0,
             'cache_hits': 0,
             'cache_misses': 0,
             'errors': 0,
             'categories': {}
-        }
+        })
         
-        logger.info(f"Analysis Agent initialized for {age_group} with {strictness_level} strictness")
+        logger.info(f"Analysis Agent initialized for {self.age_group} with {self.strictness_level} strictness")
     
+    @weave.op()
+    async def predict(self, input_text: str, screenshot_path: Optional[str] = None) -> AnalysisResult:
+        """Main prediction method for Weave Model compatibility"""
+        return await self.analyze_input_context(input_text, screenshot_path)
+    
+    @weave.op()
     async def analyze_input_context(self, 
                                   input_text: str, 
                                   screenshot_path: Optional[str] = None) -> AnalysisResult:
         """
-        Analyze input text and screen context
+        Analyze input text and screen context for comprehensive assessment
         
         Args:
             input_text: The keyboard input text to analyze
@@ -171,24 +192,35 @@ class AnalysisAgent:
         Returns:
             AnalysisResult with comprehensive analysis
         """
-        try:
-            # Check cache first
-            if self.cache_enabled:
-                cached_result = self.cache.get(input_text, screenshot_path)
-                if cached_result:
-                    self.stats['cache_hits'] += 1
-                    logger.info("Analysis result retrieved from cache")
-                    return cached_result
-                self.stats['cache_misses'] += 1
-            
-            # Perform analysis
-            start_time = time.time()
-            
-            # Use multimodal analysis if we have both text and image
-            if screenshot_path and os.path.exists(screenshot_path):
-                analysis_result = await self._analyze_multimodal_content(input_text, screenshot_path)
+        start_time = time.time()
+        
+        # Check cache first
+        if self.cache_enabled:
+            cached_result = self.cache.get(input_text, screenshot_path)
+            if cached_result:
+                self.stats['cache_hits'] += 1
+                logger.info("Analysis result retrieved from cache")
+                return cached_result
             else:
-                analysis_result = await self._analyze_text_content(input_text)
+                self.stats['cache_misses'] += 1
+        
+        try:
+            # Configure analysis settings
+            class MockToolContext:
+                def __init__(self, age_group, strictness_level):
+                    self.state = {
+                        'target_age_group': age_group,
+                        'strict_mode': strictness_level == 'strict'
+                    }
+            
+            context = MockToolContext(self.age_group, self.strictness_level)
+            configure_analysis_settings_tool(context)
+            
+            # Perform analysis based on available data
+            if screenshot_path and os.path.exists(screenshot_path):
+                analysis_data = await self._analyze_multimodal_content(input_text, screenshot_path)
+            else:
+                analysis_data = await self._analyze_text_content(input_text)
             
             # Detect application context
             app_context = await self._detect_application_context(screenshot_path)
@@ -198,18 +230,18 @@ class AnalysisAgent:
                 timestamp=datetime.now(),
                 input_text=input_text,
                 screenshot_path=screenshot_path,
-                category=analysis_result.get('category', 'unknown'),
-                confidence=analysis_result.get('confidence', 0.0),
-                age_appropriateness=analysis_result.get('age_appropriateness', {}),
-                safety_concerns=analysis_result.get('safety_concerns', []),
-                educational_value=analysis_result.get('educational_value', ''),
-                parental_action=analysis_result.get('parental_action', 'monitor'),
-                context_summary=analysis_result.get('context_summary', ''),
+                category=analysis_data.get('category', 'unknown'),
+                confidence=analysis_data.get('confidence', 0.0),
+                age_appropriateness=analysis_data.get('age_appropriateness', {}),
+                safety_concerns=analysis_data.get('safety_concerns', []),
+                educational_value=analysis_data.get('educational_value', 'Unknown'),
+                parental_action=analysis_data.get('parental_action', 'monitor'),
+                context_summary=analysis_data.get('context_summary', 'Analysis completed'),
                 application_detected=app_context.name if app_context else 'unknown',
-                detailed_analysis=analysis_result
+                detailed_analysis=analysis_data.get('detailed_analysis', {})
             )
             
-            # Cache the result
+            # Cache result
             if self.cache_enabled:
                 self.cache.set(input_text, screenshot_path, result)
             
@@ -219,7 +251,7 @@ class AnalysisAgent:
             self.stats['categories'][category] = self.stats['categories'].get(category, 0) + 1
             
             analysis_time = time.time() - start_time
-            logger.info(f"Analysis completed in {analysis_time:.2f}s - Category: {category}, Action: {result.parental_action}")
+            logger.info(f"Analysis completed in {analysis_time:.2f}s - Category: {result.category}, Action: {result.parental_action}")
             
             return result
             
@@ -227,7 +259,7 @@ class AnalysisAgent:
             self.stats['errors'] += 1
             logger.error(f"Analysis error: {e}")
             
-            # Return safe fallback result
+            # Return fallback result
             return AnalysisResult(
                 timestamp=datetime.now(),
                 input_text=input_text,
@@ -236,140 +268,109 @@ class AnalysisAgent:
                 confidence=0.0,
                 age_appropriateness={},
                 safety_concerns=['Analysis failed - manual review recommended'],
-                educational_value='Unknown',
+                educational_value='Unknown due to analysis error',
                 parental_action='monitor',
-                context_summary='Analysis failed due to technical error',
+                context_summary='Analysis failed - please review manually',
                 application_detected='unknown',
                 detailed_analysis={'error': str(e)}
             )
     
+    @weave.op()
     async def _analyze_multimodal_content(self, input_text: str, screenshot_path: str) -> Dict[str, Any]:
-        """Analyze content using both text and image"""
+        """Analyze content using multimodal AI (text + image)"""
         try:
-            # Create a mock ToolContext for configuration
             class MockToolContext:
-                def __init__(self):
-                    self.state = {}
+                def __init__(self, input_text, screenshot_path):
+                    self.state = {
+                        'current_input_text': input_text,
+                        'current_screenshot_base64': '',  # Would need to load actual image
+                        'screenshot_mime_type': 'image/jpeg'
+                    }
+                    
+                def get_session(self):
+                    return None
             
-            tool_context = MockToolContext()
-            tool_context.state = {
-                'target_age_group': self.age_group,
-                'strict_mode': self.strictness_level == 'strict'
-            }
-            
-            # Configure analysis settings
-            configure_analysis_settings_tool(tool_context)
-            
-            # Create tool context for multimodal analysis
-            tool_context.state.update({
-                'current_input_text': input_text,
-                'current_screenshot_path': screenshot_path
-            })
-            
-            # Perform multimodal analysis
-            result = analyze_multimodal_content_tool(tool_context)
-            
-            return result.get('analysis', {})
-            
+            context = MockToolContext(input_text, screenshot_path)
+            result = analyze_multimodal_content_tool(context)
+            return result
         except Exception as e:
             logger.error(f"Multimodal analysis error: {e}")
-            # Fallback to text-only analysis
             return await self._analyze_text_content(input_text)
     
+    @weave.op()
     async def _analyze_text_content(self, input_text: str) -> Dict[str, Any]:
-        """Analyze text content only"""
+        """Analyze content using text-only AI"""
         try:
-            # Create a mock ToolContext for configuration
             class MockToolContext:
-                def __init__(self):
-                    self.state = {}
+                def __init__(self, input_text):
+                    self.state = {
+                        'current_input_text': input_text
+                    }
+                    
+                def get_session(self):
+                    return None
             
-            tool_context = MockToolContext()
-            tool_context.state = {
-                'target_age_group': self.age_group,
-                'strict_mode': self.strictness_level == 'strict'
-            }
-            
-            # Configure analysis settings
-            configure_analysis_settings_tool(tool_context)
-            
-            # Create tool context for text analysis
-            tool_context.state.update({
-                'current_input_text': input_text
-            })
-            
-            # Perform text analysis
-            result = analyze_text_content_tool(tool_context)
-            
-            return result.get('analysis', {})
-            
+            context = MockToolContext(input_text)
+            result = analyze_text_content_tool(context)
+            return result
         except Exception as e:
             logger.error(f"Text analysis error: {e}")
             return {
                 'category': 'unknown',
                 'confidence': 0.0,
+                'age_appropriateness': {},
+                'safety_concerns': ['Analysis failed'],
+                'educational_value': 'Unknown',
                 'parental_action': 'monitor',
-                'context_summary': f'Analysis failed: {str(e)}'
+                'context_summary': f'Analysis failed: {str(e)}',
+                'detailed_analysis': {'error': str(e)}
             }
     
+    @weave.op()
     async def _detect_application_context(self, screenshot_path: Optional[str]) -> Optional[ApplicationContext]:
-        """Detect current application from screenshot"""
+        """Detect application context from screenshot"""
         if not screenshot_path or not os.path.exists(screenshot_path):
             return None
         
         try:
-            # Use Gemini to analyze the screenshot for application context
-            app_analysis_prompt = """
-            Analyze this screenshot and identify:
-            1. What application or website is being used?
-            2. What type of application is it (browser, game, educational software, etc.)?
-            3. If it's a browser, what website or service is being accessed?
-            4. What context clues led to this identification?
-            
-            Respond in JSON format:
-            {
-                "application_name": "name of application",
-                "application_type": "browser/game/educational/productivity/social/other",
-                "website_url": "if browser, the website being accessed",
-                "confidence": 0.95,
-                "context_clues": ["list of visual clues that led to identification"]
-            }
-            """
-            
-            # This would use the Gemini tool to analyze the screenshot
-            # For now, we'll implement a simple heuristic approach
+            # Placeholder for application detection logic
+            # This would analyze the screenshot to identify the current application
             return ApplicationContext(
-                name="Unknown Application",
-                type="unknown",
+                name="unknown",
+                type="application",
                 url=None,
                 confidence=0.5,
-                context_clues=["Screenshot analysis not yet implemented"]
+                context_clues=["screenshot_analysis"]
             )
-            
         except Exception as e:
             logger.error(f"Application detection error: {e}")
             return None
     
+    @weave.op()
     def get_analysis_statistics(self) -> Dict[str, Any]:
-        """Get analysis statistics"""
-        cache_hit_rate = 0.0
-        if self.stats['cache_hits'] + self.stats['cache_misses'] > 0:
-            cache_hit_rate = self.stats['cache_hits'] / (self.stats['cache_hits'] + self.stats['cache_misses'])
+        """Get comprehensive analysis statistics"""
+        total = self.stats['total_analyses']
+        cache_total = self.stats['cache_hits'] + self.stats['cache_misses']
         
         return {
-            'total_analyses': self.stats['total_analyses'],
-            'cache_hit_rate': cache_hit_rate,
-            'error_rate': self.stats['errors'] / max(1, self.stats['total_analyses']),
-            'category_distribution': self.stats['categories'],
-            'cache_enabled': self.cache_enabled
+            'total_analyses': total,
+            'cache_hits': self.stats['cache_hits'],
+            'cache_misses': self.stats['cache_misses'],
+            'cache_hit_rate': self.stats['cache_hits'] / max(cache_total, 1),
+            'errors': self.stats['errors'],
+            'error_rate': self.stats['errors'] / max(total, 1),
+            'categories': self.stats['categories'],
+            'category_distribution': self.stats['categories']
         }
     
+    @weave.op()
     def configure_settings(self, age_group: str, strictness_level: str):
-        """Update analysis settings"""
+        """Configure analysis settings"""
         self.age_group = age_group
         self.strictness_level = strictness_level
         logger.info(f"Analysis settings updated: {age_group}, {strictness_level}")
     
+    @weave.op()
     def cleanup_cache(self):
         """Clean up old cache files"""
         if self.cache_enabled:
@@ -378,6 +379,7 @@ class AnalysisAgent:
 
 # ADK FunctionTool implementations
 
+@weave.op()
 async def analyze_input_context_tool(input_text: str, screenshot_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Analyze input text and screen context using Analysis Agent
@@ -404,11 +406,13 @@ async def analyze_input_context_tool(input_text: str, screenshot_path: Optional[
         'application_detected': result.application_detected
     }
 
+@weave.op()
 async def get_analysis_statistics_tool() -> Dict[str, Any]:
     """Get analysis statistics from the Analysis Agent"""
     agent = get_global_analysis_engine()
     return agent.get_analysis_statistics()
 
+@weave.op()
 async def configure_analysis_agent_tool(age_group: str, strictness_level: str) -> Dict[str, str]:
     """
     Configure Analysis Agent settings
@@ -430,6 +434,7 @@ async def configure_analysis_agent_tool(age_group: str, strictness_level: str) -
         'message': f'Analysis agent configured for {age_group} with {strictness_level} strictness'
     }
 
+@weave.op()
 async def cleanup_analysis_cache_tool() -> Dict[str, str]:
     """Clean up old analysis cache files"""
     agent = get_global_analysis_engine()
@@ -521,6 +526,7 @@ class AnalysisAgentHelper:
         self.analysis_engine = get_global_analysis_engine()
         logger.info("Analysis Agent Helper initialized")
     
+    @weave.op()
     async def process_input_event(self, input_text: str, screenshot_path: Optional[str] = None) -> AnalysisResult:
         """
         Process an input event and return analysis results
@@ -534,10 +540,12 @@ class AnalysisAgentHelper:
         """
         return await self.analysis_engine.analyze_input_context(input_text, screenshot_path)
     
+    @weave.op()
     def get_statistics(self) -> Dict[str, Any]:
         """Get analysis statistics"""
         return self.analysis_engine.get_analysis_statistics()
     
+    @weave.op()
     def configure(self, age_group: str, strictness_level: str):
         """Configure analysis settings"""
         self.analysis_engine.configure_settings(age_group, strictness_level)
