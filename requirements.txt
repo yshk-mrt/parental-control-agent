@@ -1,0 +1,49 @@
+# Core Dependencies for Parental Control AI System
+# Google ADK Framework and related packages
+google-adk==1.6.1
+google-genai==1.25.0
+google-generativeai==0.6.0
+
+# Multi-model support
+litellm==1.74.2
+openai>=1.95.1
+
+# Keylogger functionality
+pynput>=1.8.1
+
+# Console output formatting
+rich>=13.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Web framework for dashboard (future use)
+fastapi>=0.116.1
+uvicorn>=0.35.0
+
+# HTTP client for API calls
+httpx>=0.28.1
+
+# Data validation and serialization
+pydantic>=2.11.7
+
+# Async support
+asyncio-mqtt>=0.16.0
+
+# Image processing (for screen capture)
+Pillow>=10.0.0
+
+# Configuration management
+PyYAML>=6.0.2
+
+# Logging and monitoring
+structlog>=23.0.0
+
+# Testing framework
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Development tools
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
