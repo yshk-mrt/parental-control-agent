@@ -2,7 +2,7 @@
 # Google ADK Framework and related packages
 google-adk==1.6.1
 google-genai==1.25.0
-google-generativeai==0.6.0
+google-generativeai>=0.8.5
 
 # Multi-model support
 litellm==1.74.2
