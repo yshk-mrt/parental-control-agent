@@ -32,6 +32,7 @@ asyncio-mqtt>=0.16.0
 
 # Image processing (for screen capture)
 Pillow>=10.0.0
+mss>=7.0.0
 
 # Configuration management
 PyYAML>=6.0.2
