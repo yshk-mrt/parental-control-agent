@@ -12,11 +12,22 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 import os
 from dotenv import load_dotenv
+import logging
 
 # Load environment variables
 load_dotenv()
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+# Timing utilities for performance analysis
+def get_precise_timestamp():
+    """Get high-precision timestamp for performance analysis"""
+    return time.time()
+
+def log_timing(phase: str, timestamp: float, input_text: str = "", extra_info: str = ""):
+    """Log timing information for performance analysis"""
+    logger.info(f"⏱️ TIMING [{phase}] {timestamp:.6f}s - {input_text[:20]}{'...' if len(input_text) > 20 else ''} {extra_info}")
 
 @dataclass
 class InputBuffer:
@@ -121,20 +132,26 @@ class EnhancedKeylogger:
         """Handle key press events"""
         with self._lock:
             try:
+                # TIMING POINT 1: Input detection
+                timestamp_1 = get_precise_timestamp()
+                
                 if key == keyboard.Key.enter:
                     self._log_keystroke("Key.enter")
                     self.buffer.add_char('\n')
                     self.buffer.mark_enter_pressed()
+                    log_timing("1_INPUT_DETECTED", timestamp_1, self.buffer.text, "enter_key")
                     self._check_completion()
                 elif key == keyboard.Key.space:
                     self._log_keystroke("Key.space")
                     self.buffer.add_char(' ')
+                    log_timing("1_INPUT_DETECTED", timestamp_1, self.buffer.text, "space_key")
                 elif key == keyboard.Key.backspace:
                     self._log_keystroke("Key.backspace")
                     # Handle backspace by removing last character
                     if self.buffer.text:
                         self.buffer.text = self.buffer.text[:-1]
                         self.buffer.last_activity = datetime.now()
+                    log_timing("1_INPUT_DETECTED", timestamp_1, self.buffer.text, "backspace_key")
                 elif key == keyboard.Key.esc:
                     self._log_keystroke("Key.esc")
                     console.print("[bold red]ESC pressed - stopping keylogger[/]")
@@ -144,11 +161,13 @@ class EnhancedKeylogger:
                     # Regular character
                     self._log_keystroke(key.char)
                     self.buffer.add_char(key.char)
+                    log_timing("1_INPUT_DETECTED", timestamp_1, self.buffer.text, f"char_{key.char}")
                     self._check_completion()
                 else:
                     # Special keys
                     key_name = str(key)
                     self._log_keystroke(key_name)
+                    log_timing("1_INPUT_DETECTED", timestamp_1, self.buffer.text, f"special_{key_name}")
                     
             except Exception as e:
                 console.print(f"[bold red]Error in key handler: {e}[/]")
@@ -156,6 +175,10 @@ class EnhancedKeylogger:
     def _check_completion(self) -> None:
         """Check if input is complete and trigger callbacks"""
         if self.buffer.is_input_complete():
+            # TIMING POINT 2: Input completion callback
+            timestamp_2 = get_precise_timestamp()
+            log_timing("2_INPUT_COMPLETION_CALLBACK", timestamp_2, self.buffer.text)
+            
             # Trigger completion callbacks
             for callback in self.completion_callbacks:
                 try:

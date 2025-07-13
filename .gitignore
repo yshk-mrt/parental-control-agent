@@ -6,3 +6,6 @@ test/__pycache__/
 data/
 .venv/
 monitoring_agent.log
+src/.frontend.pid
+src/.monitoring.pid
+src/.websocket.pid

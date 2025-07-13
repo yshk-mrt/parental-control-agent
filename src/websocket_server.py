@@ -164,9 +164,12 @@ class WebSocketServer:
                     # Remove from pending requests
                     del self.approval_requests[request_id]
                     
-                    # TODO: Forward approval response to monitoring system
-                    # This would typically unlock the system or take other actions
-                    self.process_approval_response(request_id, approved, parent_id)
+                    # Process approval response immediately in background thread
+                    threading.Thread(
+                        target=self.process_approval_response,
+                        args=(request_id, approved, parent_id),
+                        daemon=True
+                    ).start()
                 
             elif msg_type == "SYSTEM_STATUS_REQUEST" or msg_type == "REQUEST_SYSTEM_STATUS":
                 # Send current system status
@@ -237,6 +240,7 @@ class WebSocketServer:
                 # Check for messages from monitoring system
                 if not self.message_queue.empty():
                     message_data = self.message_queue.get_nowait()
+                    logger.info(f"Processing queued message: {message_data.get('type')}")
                     await self.handle_monitoring_message(message_data)
                 
                 await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
@@ -270,6 +274,8 @@ class WebSocketServer:
         elif msg_type == "APPROVAL_REQUEST":
             # Create approval request
             request_data = message_data.get("data", {})
+            logger.info(f"Received approval request data: {request_data}")
+            
             request = ApprovalRequest(
                 id=request_data.get("id", f"req_{int(time.time())}"),
                 reason=request_data.get("reason", "Inappropriate content detected"),
@@ -282,12 +288,16 @@ class WebSocketServer:
             )
             
             self.approval_requests[request.id] = request
+            logger.info(f"Created approval request: {request.id}")
+            logger.info(f"Broadcasting to {len(self.clients)} clients")
             
             await self.broadcast_message(WebSocketMessage(
                 type="APPROVAL_REQUEST",
                 data=asdict(request),
                 timestamp=datetime.now().isoformat()
             ))
+            
+            logger.info(f"Approval request broadcasted successfully: {request.id}")
         
         elif msg_type == "ACTIVITY_UPDATE":
             # Update current activity
@@ -309,26 +319,38 @@ class WebSocketServer:
     
     def send_message_to_clients(self, message_type: str, data: Dict[str, Any]):
         """Thread-safe method to send messages to clients"""
-        self.message_queue.put({
+        message = {
             "type": message_type,
             "data": data,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        
+        logger.info(f"Queueing message for clients: {message_type}")
+        logger.debug(f"Message data: {data}")
+        logger.info(f"Connected clients: {len(self.clients)}")
+        
+        self.message_queue.put(message)
     
     def process_approval_response(self, request_id: str, approved: bool, parent_id: str):
         """Process approval response from parent"""
         logger.info(f"Processing approval response: {request_id} = {'Approved' if approved else 'Denied'}")
         
-        # TODO: Integrate with monitoring system
-        # This should unlock the system if approved, or maintain lock if denied
-        if approved:
-            self.send_message_to_clients("SYSTEM_UNLOCKED", {
-                "requestId": request_id,
-                "parentId": parent_id,
-                "timestamp": datetime.now().isoformat()
-            })
-        else:
-            logger.info(f"Request {request_id} denied, maintaining system lock")
+        # Forward to approval manager
+        try:
+            from approval_manager import get_approval_manager
+            approval_manager = get_approval_manager()
+            approval_manager.process_approval_response(request_id, approved, parent_id)
+        except ImportError:
+            logger.error("Approval manager not available")
+            # Fallback behavior
+            if approved:
+                self.send_message_to_clients("SYSTEM_UNLOCKED", {
+                    "requestId": request_id,
+                    "parentId": parent_id,
+                    "timestamp": datetime.now().isoformat()
+                })
+            else:
+                logger.info(f"Request {request_id} denied, maintaining system lock")
     
     def apply_settings(self, settings: Dict[str, Any]):
         """Apply settings from parent dashboard"""
@@ -338,6 +360,7 @@ class WebSocketServer:
     
     def update_system_status(self, status: str, connection_health: str = "good"):
         """Update system status"""
+        logger.info(f"Updating system status: {status} (health: {connection_health})")
         self.system_status.status = status
         self.system_status.lastUpdate = datetime.now().isoformat()
         self.system_status.connectionHealth = connection_health

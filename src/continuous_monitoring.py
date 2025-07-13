@@ -1,170 +1,170 @@
 #!/usr/bin/env python3
 """
-Continuous Parental Control Monitoring Script
+Continuous Monitoring with Debug Window
 
-This script runs the MonitoringAgent continuously to monitor keyboard input
-and screen activity for parental control purposes.
-
-Usage:
-    python src/continuous_monitoring.py
-
-Features:
-- Real-time keyboard monitoring
-- Screen capture integration
-- Content analysis and judgment
-- Notification system
-- Session management
-- Performance monitoring
+This script runs the parental control monitoring system with a real-time debug window
+that shows analysis results and system status.
 """
 
-import asyncio
-import signal
 import sys
+import os
+import threading
+import asyncio
 import time
-import logging
-from datetime import datetime
+import signal
 from pathlib import Path
 
 # Add src directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from monitoring_agent import MonitoringAgent, MonitoringConfig
-from session_manager import SessionManager
-from analysis_agent import AnalysisAgent
-from judgment_engine import JudgmentEngine
-from notification_agent import NotificationAgent
+from debug_window import create_debug_window, get_debug_window
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-class ContinuousMonitor:
-    """Continuous monitoring coordinator"""
+class MonitoringWithDebug:
+    """
+    Wrapper class that runs monitoring agent with debug window
+    """
     
     def __init__(self):
+        self.monitoring_agent = None
+        self.debug_window = None
+        self.monitoring_thread = None
         self.running = False
-        self.agent = None
-        self.session_id = None
         
-    async def start(self):
-        """Start continuous monitoring"""
-        try:
-            print("🚀 Starting Continuous Parental Control Monitoring")
-            print("=" * 60)
-            
-            # Configuration
-            config = MonitoringConfig(
-                age_group="elementary",
-                strictness_level="moderate",
-                enable_notifications=True,
-                screenshot_on_input=True,
-                cache_enabled=False  # Disable cache for fresh results
-            )
-            
-            print("⚙️  Configuration:")
-            print(f"   Age Group: {config.age_group}")
-            print(f"   Strictness: {config.strictness_level}")
-            print(f"   Notifications: {'Enabled' if config.enable_notifications else 'Disabled'}")
-            print(f"   Screenshots: {'Enabled' if config.screenshot_on_input else 'Disabled'}")
-            print(f"   Cache: {'Disabled' if not config.cache_enabled else 'Enabled'}")
-            print("=" * 60)
-            
-            # Create monitoring agent with configuration
-            self.agent = MonitoringAgent(config=config)
-            
-            # Start monitoring
-            start_result = await self.agent.start_monitoring()
-            if start_result.get('status') != 'success':
-                print(f"❌ Failed to start monitoring: {start_result.get('error', 'Unknown error')}")
-                return
-            
-            self.session_id = start_result.get('session_id')
-            
-            print("✅ Monitoring started successfully!")
-            print(f"📊 Session ID: {self.session_id}")
-            print(f"🕐 Started at: {datetime.now().isoformat()}")
-            print()
-            print("🔍 Monitoring keyboard input... (Press Ctrl+C to stop)")
-            print("=" * 60)
-            
-            self.running = True
-            
-            # Status update loop
-            while self.running:
-                await asyncio.sleep(30)  # Status update every 30 seconds
-                if self.running:
-                    await self._print_status()
+    def setup_monitoring_agent(self):
+        """Setup the monitoring agent with debug window integration"""
+        
+        # Create monitoring configuration
+        config = MonitoringConfig(
+            age_group="elementary",
+            strictness_level="moderate",
+            enable_notifications=True,
+            screenshot_on_input=True,
+            cache_enabled=True,
+            monitoring_interval=1.0  # Check every second
+        )
+        
+        # Create monitoring agent with debug window
+        self.monitoring_agent = MonitoringAgent(config, debug_window=self.debug_window)
+        
+        print("✅ Monitoring agent configured")
+    
+    def monitoring_loop(self):
+        """Run the monitoring loop in a separate thread"""
+        async def async_monitoring_loop():
+            try:
+                print("🚀 Starting monitoring loop...")
+                
+                # Start monitoring
+                result = await self.monitoring_agent.start_monitoring()
+                print(f"✅ Monitoring started: {result}")
+                
+                # Update debug window status
+                if self.debug_window:
+                    self.debug_window.update_status("Monitoring Active")
+                
+                # Keep running until stopped
+                while self.running:
+                    await asyncio.sleep(1)
                     
-        except KeyboardInterrupt:
-            print("\n🛑 Monitoring stopped by user")
-            await self.stop()
-        except Exception as e:
-            logger.error(f"Error in continuous monitoring: {e}")
-            await self.stop()
+            except Exception as e:
+                print(f"❌ Error in monitoring loop: {e}")
+                if self.debug_window:
+                    self.debug_window.log_debug_entry("System Error", "error", error=str(e))
+                    self.debug_window.update_status("Error")
+            finally:
+                print("🛑 Monitoring loop stopped")
+        
+        # Run the async loop
+        asyncio.run(async_monitoring_loop())
     
-    async def stop(self):
-        """Stop continuous monitoring"""
+    def start_monitoring_thread(self):
+        """Start the monitoring in a background thread"""
+        self.running = True
+        self.monitoring_thread = threading.Thread(target=self.monitoring_loop, daemon=True)
+        self.monitoring_thread.start()
+        print("✅ Monitoring thread started")
+    
+    def stop_monitoring(self):
+        """Stop the monitoring system"""
+        print("🛑 Stopping monitoring system...")
         self.running = False
-        if self.agent:
-            await self.agent.stop_monitoring()
-            
-            # Print final statistics
-            stats = self.agent.get_monitoring_status()
-            print("\n📈 Final Statistics:")
-            print(f"   Total Events: {stats.get('total_events', 0)}")
-            print(f"   Inputs Processed: {stats.get('inputs_processed', 0)}")
-            print(f"   Notifications Sent: {stats.get('notifications_sent', 0)}")
-            print(f"   Errors: {stats.get('errors', 0)}")
-            print(f"   Session Duration: {stats.get('uptime', 'Unknown')}")
-            
-        print("👋 Monitoring stopped successfully!")
+        
+        if self.monitoring_agent:
+            try:
+                asyncio.run(self.monitoring_agent.stop_monitoring())
+            except Exception as e:
+                print(f"Error stopping monitoring agent: {e}")
+        
+        if self.monitoring_thread and self.monitoring_thread.is_alive():
+            self.monitoring_thread.join(timeout=5)
+        
+        print("✅ Monitoring system stopped")
     
-    async def _print_status(self):
-        """Print current status"""
-        if not self.agent:
-            return
-            
+    def run(self):
+        """Run the complete system with debug window"""
         try:
-            stats = self.agent.get_monitoring_status()
-            current_time = datetime.now().strftime("%H:%M:%S")
+            print("🔍 Debug Window Controls:")
+            print("   - Clear: Clear all debug entries")
+            print("   - Hide: Hide/show the debug window")
+            print("   - Close: Close the debug window")
             
-            print(f"\n📊 Status Update [{current_time}]:")
-            print(f"   Status: {stats.get('status', 'unknown')}")
-            print(f"   Events: {stats.get('total_events', 0)}")
-            print(f"   Inputs: {stats.get('inputs_processed', 0)}")
-            print(f"   Errors: {stats.get('errors', 0)}")
-            print(f"   Avg Time: {stats.get('avg_processing_time', 0):.3f}s")
+            print("\n📊 Debug Window Information:")
+            print("   - Yellow text: Current input being typed")
+            print("   - Gray status: Incomplete input (waiting for more)")
+            print("   - Orange status: Processing input")
+            print("   - Green status: Complete analysis")
+            print("   - Red status: Error occurred")
             
-            # Show recent events
-            recent_events = stats.get('recent_events', [])
-            if recent_events:
-                print("   Recent Events:")
-                for event in recent_events[-3:]:  # Show last 3 events
-                    input_preview = event.get('input_preview', '...')
-                    category = event.get('category', 'unknown')
-                    action = event.get('action', 'unknown')
-                    print(f"     • {input_preview} → {category} → {action}")
+            print("\n🎯 Categories:")
+            print("   - Green: Safe content")
+            print("   - Blue: Educational content")
+            print("   - Orange: Concerning content")
+            print("   - Red: Blocked content")
             
+            print("\n⚡ Actions:")
+            print("   - Green: Allow")
+            print("   - Yellow: Monitor")
+            print("   - Orange: Restrict")
+            print("   - Red: Block")
+            
+            print("\n🚀 Starting Continuous Parental Control Monitoring with Debug Window")
+            print("=" * 70)
+            
+            # Create debug window (must be done in main thread)
+            print("🔍 Starting debug window...")
+            self.debug_window = create_debug_window()
+            
+            # Setup monitoring agent
+            self.setup_monitoring_agent()
+            
+            # Start monitoring in background thread
+            self.start_monitoring_thread()
+            
+            # Run debug window in main thread (this blocks until window is closed)
+            self.debug_window.run()
+            
+        except KeyboardInterrupt:
+            print("\n🛑 Received interrupt signal")
         except Exception as e:
-            logger.error(f"Error getting status: {e}")
+            print(f"❌ Error running system: {e}")
+        finally:
+            self.stop_monitoring()
 
 def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    print(f"\n🛑 Received signal {signum}, shutting down...")
+    """Handle interrupt signals"""
+    print(f"\n🛑 Received signal {signum}")
     sys.exit(0)
 
-async def main():
-    """Main function"""
-    # Set up signal handlers
+def main():
+    """Main entry point"""
+    # Setup signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Create and start monitor
-    monitor = ContinuousMonitor()
-    await monitor.start()
+    # Create and run the monitoring system
+    monitoring_system = MonitoringWithDebug()
+    monitoring_system.run()
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    main() 

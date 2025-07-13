@@ -47,51 +47,16 @@ async def main():
         logger.info("Frontend can connect at: ws://localhost:8080/parent-dashboard")
         logger.info("Press Ctrl+C to stop the server")
         
-        # Simulate some test events after a delay
-        await asyncio.sleep(5)
+        # Initialize system status only
+        await asyncio.sleep(2)
         
         # Import the functions here to avoid circular imports
-        from websocket_server import (
-            send_system_lock_notification,
-            send_approval_request,
-            send_activity_update,
-            update_system_status
-        )
+        from websocket_server import update_system_status
         
-        logger.info("Sending test notifications...")
+        logger.info("Initializing system status...")
         
-        # Test system status update
+        # Set initial system status
         update_system_status("monitoring", "good")
-        
-        # Test activity update
-        send_activity_update(
-            application_name="Test Application",
-            duration=120,
-            category="Education",
-            childId="child-001",
-            isActive=True
-        )
-        
-        # Test approval request after 10 seconds
-        await asyncio.sleep(10)
-        send_approval_request(
-            request_id="test-001",
-            reason="Test approval request - inappropriate content detected",
-            applicationName="Test Browser",
-            blockedUrl="https://example.com/blocked",
-            keywords=["inappropriate", "content"],
-            confidence=0.85
-        )
-        
-        # Test system lock notification
-        await asyncio.sleep(5)
-        send_system_lock_notification(
-            reason="Test system lock - inappropriate content detected",
-            applicationName="Test Browser",
-            blockedContent="test content",
-            category="inappropriate",
-            confidence=0.9
-        )
         
         # Keep the server running
         await asyncio.Future()  # Run forever

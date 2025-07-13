@@ -46,6 +46,15 @@ try:
 except Exception as e:
     logger.warning(f"Weave initialization failed: {e}. Continuing without Weave tracking.")
 
+# Timing utilities for performance analysis
+def get_precise_timestamp():
+    """Get high-precision timestamp for performance analysis"""
+    return time.time()
+
+def log_timing(phase: str, timestamp: float, input_text: str = "", extra_info: str = ""):
+    """Log timing information for performance analysis"""
+    logger.info(f"⏱️ TIMING [{phase}] {timestamp:.6f}s - {input_text[:20]}{'...' if len(input_text) > 20 else ''} {extra_info}")
+
 @dataclass
 class AnalysisResult:
     """Structured result from content analysis"""
@@ -180,6 +189,40 @@ class AnalysisAgent(weave.Model):
         """Main prediction method for Weave Model compatibility"""
         return await self.analyze_input_context(input_text, screenshot_path, force_analysis=True)
     
+    def _is_potentially_inappropriate(self, input_text: str) -> bool:
+        """Check if input contains potentially inappropriate content that should be analyzed immediately"""
+        # Common inappropriate words/phrases that should be analyzed even if short
+        inappropriate_keywords = [
+            'fuck', 'shit', 'damn', 'hell', 'bitch', 'ass', 'crap',
+            'piss', 'bastard', 'whore', 'slut', 'nigger', 'faggot',
+            'retard', 'gay', 'lesbian', 'porn', 'sex', 'dick', 'cock',
+            'pussy', 'boob', 'tit', 'nude', 'naked', 'kill', 'die',
+            'suicide', 'murder', 'rape', 'drug', 'weed', 'cocaine',
+            'heroin', 'meth', 'alcohol', 'beer', 'wine', 'drunk',
+            'hate', 'violence', 'bomb', 'gun', 'weapon', 'blood'
+        ]
+        
+        # Check if input contains any inappropriate keywords
+        input_lower = input_text.lower().strip()
+        
+        # Check for exact matches or words within the text
+        for keyword in inappropriate_keywords:
+            if keyword in input_lower:
+                return True
+        
+        # Check for suspicious patterns (multiple special characters, excessive caps, etc.)
+        if len(input_lower) >= 3:
+            # Check for excessive special characters
+            special_chars = sum(1 for c in input_text if not c.isalnum() and not c.isspace())
+            if special_chars > len(input_text) * 0.3:  # More than 30% special characters
+                return True
+            
+            # Check for excessive caps
+            if input_text.isupper() and len(input_text) > 3:
+                return True
+        
+        return False
+    
     async def _check_input_completeness(self, input_text: str) -> Dict[str, Any]:
         """Use LLM to check if input appears to be complete or incomplete"""
         # Handle empty or whitespace-only inputs
@@ -277,14 +320,24 @@ Respond with JSON format:
         """
         start_time = time.time()
         
+        # Analysis timing - entry point
+        timestamp_analysis_start = get_precise_timestamp()
+        log_timing("ANALYSIS_START", timestamp_analysis_start, input_text)
+        
         # Check for incomplete input using LLM (unless forced)
         if not force_analysis:
-            completeness_check = await self._check_input_completeness(input_text)
-            if not completeness_check["is_complete"]:
-                logger.info(f"LLM detected incomplete input: '{input_text}' - {completeness_check['reason']} - Deferring analysis")
-                
-                # Return None to indicate that processing should be deferred
-                return None
+            # Skip completeness check for potentially inappropriate content
+            # Even short words like "fuck" should be analyzed immediately
+            if self._is_potentially_inappropriate(input_text):
+                logger.info(f"Potentially inappropriate content detected, forcing analysis: '{input_text[:20]}...'")
+                force_analysis = True
+            else:
+                completeness_check = await self._check_input_completeness(input_text)
+                if not completeness_check["is_complete"]:
+                    logger.info(f"LLM detected incomplete input: '{input_text}' - {completeness_check['reason']} - Deferring analysis")
+                    
+                    # Return None to indicate that processing should be deferred
+                    return None
         
         # Check cache first
         if self.cache_enabled and self.cache:
@@ -309,10 +362,16 @@ Respond with JSON format:
             configure_analysis_settings_tool(context)
             
             # Perform analysis based on available data
+            timestamp_gemini_start = get_precise_timestamp()
+            log_timing("GEMINI_ANALYSIS_START", timestamp_gemini_start, input_text)
+            
             if screenshot_path and os.path.exists(screenshot_path):
                 analysis_data = await self._analyze_multimodal_content(input_text, screenshot_path)
             else:
                 analysis_data = await self._analyze_text_content(input_text)
+            
+            timestamp_gemini_end = get_precise_timestamp()
+            log_timing("GEMINI_ANALYSIS_END", timestamp_gemini_end, input_text, f"gemini_time={(timestamp_gemini_end-timestamp_gemini_start):.2f}s")
             
             # Detect application context
             app_context = await self._detect_application_context(screenshot_path)
@@ -343,6 +402,11 @@ Respond with JSON format:
             self.stats['categories'][category] = self.stats['categories'].get(category, 0) + 1
             
             analysis_time = time.time() - start_time
+            
+            # Analysis timing - completion
+            timestamp_analysis_end = get_precise_timestamp()
+            log_timing("ANALYSIS_END", timestamp_analysis_end, input_text, f"total_analysis_time={(timestamp_analysis_end-timestamp_analysis_start):.2f}s")
+            
             logger.info(f"Analysis completed in {analysis_time:.2f}s - Category: {result.category}, Action: {result.parental_action}")
             
             return result

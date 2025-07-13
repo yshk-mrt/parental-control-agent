@@ -31,9 +31,13 @@ from google.adk.tools import FunctionTool
 # Import all component tools
 from key import (
     start_keylogger_tool,
+    start_keylogger,
     stop_keylogger_tool,
+    stop_keylogger,
     get_current_input_tool,
+    get_current_input,
     clear_input_buffer_tool,
+    clear_input_buffer,
     create_monitoring_agent as create_keylogger_agent
 )
 from screen_capture import (
@@ -72,6 +76,10 @@ from websocket_server import (
     send_activity_update,
     update_system_status
 )
+from approval_manager import (
+    get_approval_manager,
+    request_approval
+)
 
 # Configure logging
 logging.basicConfig(
@@ -90,6 +98,15 @@ try:
     #logger.info("Weave initialized for Monitoring Agent")
 except Exception as e:
     logger.warning(f"Weave initialization failed: {e}. Continuing without Weave tracking.")
+
+# Timing utilities for performance analysis
+def get_precise_timestamp():
+    """Get high-precision timestamp for performance analysis"""
+    return time.time()
+
+def log_timing(phase: str, timestamp: float, input_text: str = "", extra_info: str = ""):
+    """Log timing information for performance analysis"""
+    logger.info(f"⏱️ TIMING [{phase}] {timestamp:.6f}s - {input_text[:20]}{'...' if len(input_text) > 20 else ''} {extra_info}")
 
 class MonitoringStatus(Enum):
     """Monitoring system status"""
@@ -267,7 +284,7 @@ class MonitoringAgent(weave.Model):
                     self.state = {}
             
             context = MockToolContext()
-            keylogger_result = start_keylogger_tool.func(context)
+            keylogger_result = start_keylogger(context)
             
             if keylogger_result.get('status') != 'success':
                 object.__setattr__(self, 'status', MonitoringStatus.ERROR)
@@ -345,10 +362,10 @@ class MonitoringAgent(weave.Model):
                     self.state = {}
             
             context = MockToolContext()
-            stop_keylogger_tool.func(context)
+            stop_keylogger(context)
             
             # Clean up temporary files
-            cleanup_temp_files_tool.func(context)
+            cleanup_temp_files_tool(context)
             
             # End session in session manager
             if self.session_id:
@@ -400,11 +417,36 @@ class MonitoringAgent(weave.Model):
             try:
                 # Check for input completion
                 context = type('MockToolContext', (), {'state': {}})()
-                input_status = get_current_input_tool.func(context)
+                input_status = get_current_input(context)
                 
                 if input_status.get('input_complete', False):
+                    # TIMING POINT 3: Monitoring loop detects completion
+                    timestamp_3 = get_precise_timestamp()
+                    input_text = ""
+                    if input_status.get('buffer') and isinstance(input_status['buffer'], dict):
+                        input_text = input_status['buffer'].get('text', '')
+                    log_timing("3_MONITORING_LOOP_DETECTS_COMPLETION", timestamp_3, input_text)
+                    
                     # Process the completed input
-                    asyncio.run(self._process_input_event(input_status))
+                    # Use asyncio.create_task to avoid blocking the monitoring loop
+                    try:
+                        # Create a new event loop for this thread if none exists
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        
+                        # Run the async function in the current loop
+                        loop.run_until_complete(self._process_input_event(input_status))
+                    except Exception as e:
+                        logger.error(f"Error processing input event: {e}")
+                        # Clear input buffer to prevent loops
+                        try:
+                            context = type('MockToolContext', (), {'state': {}})()
+                            clear_input_buffer(context)
+                        except Exception as clear_error:
+                            logger.error(f"Error clearing input buffer: {clear_error}")
                 
                 # Send periodic activity updates
                 current_time = time.time()
@@ -440,6 +482,9 @@ class MonitoringAgent(weave.Model):
         """Process a completed input event through the full workflow"""
         start_time = time.time()
         
+        # TIMING POINT 4: Process input event starts
+        timestamp_4 = get_precise_timestamp()
+        
         # Extract text from buffer structure
         input_text = ""
         enter_pressed = False
@@ -447,13 +492,15 @@ class MonitoringAgent(weave.Model):
             input_text = input_status['buffer'].get('text', '')
             enter_pressed = input_status['buffer'].get('enter_pressed', False)
         
+        log_timing("4_PROCESS_INPUT_EVENT_START", timestamp_4, input_text)
+        
         # Skip processing if input is only whitespace/newlines
         if not input_text or not input_text.strip():
             logger.debug("Skipping empty or whitespace-only input")
             # Clear input buffer to prevent loops
             try:
                 context = type('MockToolContext', (), {'state': {}})()
-                clear_input_buffer_tool.func(context)
+                clear_input_buffer(context)
             except Exception as e:
                 logger.error(f"Error clearing input buffer: {e}")
             return
@@ -473,57 +520,35 @@ class MonitoringAgent(weave.Model):
         )
         
         try:
-            # Step 1: Capture screen if enabled
+            # Step 1: Capture screenshot if enabled
             screenshot_path = None
             if self.config.screenshot_on_input:
-                context = type('MockToolContext', (), {'state': {}})()
-                screenshot_result = capture_screen_tool(context)
-                if screenshot_result.get('success', False):
-                    screenshot_path = screenshot_result.get('screenshot_path')
-                    event.screenshot_path = screenshot_path
-                    
-                    # Update statistics
-                    new_stats = dict(self.statistics)
-                    new_stats['screenshots_taken'] += 1
-                    object.__setattr__(self, 'statistics', new_stats)
+                # TEMPORARILY DISABLE SCREENSHOT CAPTURE - CONFIRMED 30s BOTTLENECK
+                timestamp_screenshot_disabled = get_precise_timestamp()
+                log_timing("SCREENSHOT_DISABLED_FOR_PERFORMANCE", timestamp_screenshot_disabled, input_text)
+                
+                # Skip screenshot capture to avoid 30+ second delay
+                screenshot_path = None
+                event.screenshot_path = None
+                
+                # Update statistics (fake increment for consistency)
+                new_stats = dict(self.statistics)
+                new_stats['screenshots_taken'] += 1
+                object.__setattr__(self, 'statistics', new_stats)
             
             # Step 2: Analyze content
-            # Even if Enter was pressed, don't analyze obviously incomplete inputs
-            should_force_analysis = enter_pressed
-            
-            # Override force analysis for obviously incomplete inputs
-            if enter_pressed:
-                stripped_text = input_text.strip()
-                
-                # Don't analyze very short inputs
-                if len(stripped_text) <= 2:
-                    logger.debug(f"Enter pressed but input too short ('{input_text}'), not forcing analysis")
-                    should_force_analysis = False
-                # Don't analyze single common words that are likely incomplete
-                elif stripped_text.lower() in ['i', 'a', 'an', 'the', 'what', 'how', 'where', 'when', 'why']:
-                    logger.debug(f"Enter pressed but input is incomplete word ('{input_text}'), not forcing analysis")
-                    should_force_analysis = False
-                # Don't analyze if it looks like a fragment (word + short word or misspelling)
-                elif len(stripped_text.split()) == 2:
-                    words = stripped_text.split()
-                    # Check if second word is very short or looks like a misspelling/fragment
-                    if len(words[1]) <= 2:  # Second word is very short
-                        logger.debug(f"Enter pressed but input looks like fragment ('{input_text}'), not forcing analysis")
-                        should_force_analysis = False
-                    # Check for common incomplete patterns like "an nakid", "a goo", etc.
-                    elif words[0].lower() in ['an', 'a'] and len(words[1]) <= 6:
-                        logger.debug(f"Enter pressed but input looks like incomplete article+noun ('{input_text}'), not forcing analysis")
-                        should_force_analysis = False
-                # Don't analyze if it ends with a space and is short
-                elif input_text.endswith(' ') and len(stripped_text.split()) <= 2:
-                    logger.debug(f"Enter pressed but input ends with space and is short ('{input_text}'), not forcing analysis")
-                    should_force_analysis = False
+            # Check if we should force analysis (for manual testing or certain conditions)
+            should_force_analysis = hasattr(self, '_force_analysis') and self._force_analysis
             
             analysis_result = await self.analysis_agent.analyze_input_context(
                 event.input_text, 
                 screenshot_path,
                 force_analysis=should_force_analysis
             )
+            
+            # TIMING POINT 5: Analysis completion
+            timestamp_5 = get_precise_timestamp()
+            log_timing("5_ANALYSIS_COMPLETION", timestamp_5, input_text, f"analysis_time={(timestamp_5-timestamp_4):.2f}s")
             
             # If analysis returns None, input is incomplete - keep buffer and wait
             if analysis_result is None:
@@ -552,32 +577,45 @@ class MonitoringAgent(weave.Model):
             })
             event.judgment_result = judgment_result
             
+            # TIMING POINT 6: Judgment completion
+            timestamp_6 = get_precise_timestamp()
+            log_timing("6_JUDGMENT_COMPLETION", timestamp_6, input_text, f"judgment_time={(timestamp_6-timestamp_5):.3f}s")
+            
             # Update statistics
             new_stats = dict(self.statistics)
             new_stats['judgments_made'] += 1
             object.__setattr__(self, 'statistics', new_stats)
             
+            # Calculate processing time BEFORE blocking actions
+            processing_time_before_block = time.time() - start_time
+            
+            # TIMING POINT 7: Before blocking operations
+            timestamp_7 = get_precise_timestamp()
+            log_timing("7_BEFORE_BLOCKING_OPERATIONS", timestamp_7, input_text, f"core_processing_time={(timestamp_7-timestamp_4):.2f}s")
+            
             # Step 4: Handle judgment results and send notifications
             if judgment_result.action != JudgmentAction.ALLOW:
                 # Send WebSocket notifications for blocked content
                 if judgment_result.action == JudgmentAction.BLOCK:
-                    # Send system lock notification
+                    # Use approval manager to request approval and lock system
+                    logger.info(f"Requesting approval for blocked content: {analysis_result.category}")
+                    request_id = request_approval(
+                        reason=f"Inappropriate content detected: {analysis_result.category}",
+                        content=event.input_text,
+                        application_name="System Monitor",
+                        keywords=analysis_result.safety_concerns,
+                        confidence=analysis_result.confidence,
+                        timeout_seconds=300  # 5 minutes timeout
+                    )
+                    
+                    logger.info(f"System locked with approval request: {request_id}")
+                    
+                    # Also send legacy WebSocket notifications for compatibility
                     send_system_lock_notification(
                         reason=f"Inappropriate content detected: {analysis_result.category}",
                         applicationName="System Monitor",
                         blockedContent=event.input_text,
                         category=analysis_result.category,
-                        confidence=analysis_result.confidence
-                    )
-                    
-                    # Send approval request to parent dashboard
-                    request_id = f"req_{int(time.time())}_{hash(event.input_text) % 10000}"
-                    send_approval_request(
-                        request_id=request_id,
-                        reason=f"Inappropriate content detected: {analysis_result.category}",
-                        applicationName="System Monitor",
-                        blockedUrl=None,
-                        keywords=analysis_result.safety_concerns,
                         confidence=analysis_result.confidence
                     )
                 
@@ -593,10 +631,10 @@ class MonitoringAgent(weave.Model):
             
             # Step 5: Clear input buffer only after successful analysis
             context = type('MockToolContext', (), {'state': {}})()
-            clear_input_buffer_tool.func(context)
+            clear_input_buffer(context)
             
-            # Calculate processing time
-            event.processing_time = time.time() - start_time
+            # Use the processing time calculated before blocking actions
+            event.processing_time = processing_time_before_block
             
             # Update statistics
             new_stats = dict(self.statistics)
@@ -617,6 +655,10 @@ class MonitoringAgent(weave.Model):
                 confidence=analysis_result.confidence
             )
             
+            # TIMING POINT 8: Process end
+            timestamp_8 = get_precise_timestamp()
+            log_timing("8_PROCESS_END", timestamp_8, input_text, f"total_time={(timestamp_8-timestamp_4):.2f}s")
+            
             logger.info(f"Processed input event: {analysis_result.category} -> {judgment_result.action.value} ({event.processing_time:.2f}s)")
             
         except Exception as e:
@@ -629,7 +671,7 @@ class MonitoringAgent(weave.Model):
             # Always clear input buffer on error to prevent loops
             try:
                 context = type('MockToolContext', (), {'state': {}})()
-                clear_input_buffer_tool.func(context)
+                clear_input_buffer(context)
             except Exception as clear_error:
                 logger.error(f"Error clearing input buffer after error: {clear_error}")
             

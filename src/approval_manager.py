@@ -1,0 +1,552 @@
+"""
+Approval Manager for Parental Control System
+
+This module manages approval requests and integrates with:
+- Lock screen system
+- WebSocket server for parent communication
+- Monitoring system for content blocking
+- Timeout handling and emergency procedures
+"""
+
+import asyncio
+import threading
+import time
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, Any, Optional, Callable, List
+from dataclasses import dataclass, field
+from enum import Enum
+import json
+import uuid
+
+from lock_screen import show_system_lock, unlock_system, is_system_locked, update_lock_status
+from websocket_server import get_websocket_server
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Timing utilities for performance analysis
+def get_precise_timestamp():
+    """Get high-precision timestamp for performance analysis"""
+    return time.time()
+
+def log_timing(phase: str, timestamp: float, input_text: str = "", extra_info: str = ""):
+    """Log timing information for performance analysis"""
+    logger.info(f"⏱️ TIMING [{phase}] {timestamp:.6f}s - {input_text[:20]}{'...' if len(input_text) > 20 else ''} {extra_info}")
+
+class ApprovalStatus(Enum):
+    """Status of approval request"""
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+
+@dataclass
+class ApprovalRequest:
+    """Approval request data structure"""
+    id: str
+    reason: str
+    timestamp: datetime
+    content: str = ""
+    application_name: str = "Unknown"
+    blocked_url: Optional[str] = None
+    keywords: List[str] = field(default_factory=list)
+    confidence: float = 0.0
+    child_id: str = "child-001"
+    parent_id: str = "parent-001"
+    status: ApprovalStatus = ApprovalStatus.PENDING
+    timeout_seconds: int = 300  # 5 minutes default
+    response_time: Optional[datetime] = None
+    response_data: Dict[str, Any] = field(default_factory=dict)
+
+class ApprovalManager:
+    """Manages approval requests and system locking"""
+    
+    def __init__(self):
+        self.active_requests: Dict[str, ApprovalRequest] = {}
+        self.request_history: List[ApprovalRequest] = []
+        self.websocket_server = get_websocket_server()
+        self.lock_thread = None
+        self.is_system_locked = False
+        self.current_request_id = None
+        
+        # Statistics
+        self.stats = {
+            'total_requests': 0,
+            'approved_requests': 0,
+            'denied_requests': 0,
+            'timeout_requests': 0,
+            'average_response_time': 0.0
+        }
+        
+        logger.info("Approval Manager initialized")
+    
+    def create_approval_request(self, reason: str, content: str = "", 
+                              application_name: str = "Unknown",
+                              blocked_url: str = None,
+                              keywords: List[str] = None,
+                              confidence: float = 0.0,
+                              timeout_seconds: int = 300) -> str:
+        """
+        Create a new approval request
+        
+        Args:
+            reason: Reason for the request
+            content: Content that triggered the request
+            application_name: Name of the application
+            blocked_url: URL that was blocked (if applicable)
+            keywords: Keywords that triggered the block
+            confidence: AI confidence level
+            timeout_seconds: Timeout in seconds
+            
+        Returns:
+            Request ID
+        """
+        request_id = str(uuid.uuid4())
+        
+        request = ApprovalRequest(
+            id=request_id,
+            reason=reason,
+            timestamp=datetime.now(),
+            content=content,
+            application_name=application_name,
+            blocked_url=blocked_url,
+            keywords=keywords or [],
+            confidence=confidence,
+            timeout_seconds=timeout_seconds
+        )
+        
+        self.active_requests[request_id] = request
+        self.stats['total_requests'] += 1
+        
+        logger.info(f"Created approval request: {request_id} - {reason}")
+        
+        return request_id
+    
+    def request_approval_with_lock(self, reason: str, content: str = "",
+                                  application_name: str = "Unknown",
+                                  blocked_url: str = None,
+                                  keywords: List[str] = None,
+                                  confidence: float = 0.0,
+                                  timeout_seconds: int = 300) -> str:
+        """
+        Request approval and lock the system
+        
+        Args:
+            reason: Reason for the request
+            content: Content that triggered the request
+            application_name: Name of the application
+            blocked_url: URL that was blocked (if applicable)
+            keywords: Keywords that triggered the block
+            confidence: AI confidence level
+            timeout_seconds: Timeout in seconds
+            
+        Returns:
+            Request ID
+        """
+        # Create approval request
+        request_id = self.create_approval_request(
+            reason=reason,
+            content=content,
+            application_name=application_name,
+            blocked_url=blocked_url,
+            keywords=keywords,
+            confidence=confidence,
+            timeout_seconds=timeout_seconds
+        )
+        
+        # Send approval request to parent dashboard
+        self._send_approval_request_to_parent(request_id)
+        
+        # Lock the system
+        self._lock_system_for_approval(request_id)
+        
+        return request_id
+    
+    def _send_approval_request_to_parent(self, request_id: str):
+        """Send approval request to parent dashboard via WebSocket"""
+        if request_id not in self.active_requests:
+            logger.error(f"Request {request_id} not found")
+            return
+        
+        request = self.active_requests[request_id]
+        
+        # Prepare approval request data
+        approval_data = {
+            "id": request.id,
+            "reason": request.reason,
+            "timestamp": request.timestamp.isoformat(),
+            "applicationName": request.application_name,
+            "blockedUrl": request.blocked_url,
+            "keywords": request.keywords,
+            "confidence": request.confidence,
+            "childId": request.child_id
+        }
+        
+        logger.info(f"Sending approval request to parent dashboard: {request_id}")
+        logger.info(f"Approval request data: {approval_data}")
+        
+        # WebSocket timing - start
+        timestamp_websocket_start = get_precise_timestamp()
+        log_timing("WEBSOCKET_SEND_START", timestamp_websocket_start, request.content)
+        
+        # Send via WebSocket
+        try:
+            self.websocket_server.send_message_to_clients("APPROVAL_REQUEST", approval_data)
+            
+            # WebSocket timing - end
+            timestamp_websocket_end = get_precise_timestamp()
+            log_timing("WEBSOCKET_SEND_END", timestamp_websocket_end, request.content, f"websocket_time={(timestamp_websocket_end-timestamp_websocket_start):.3f}s")
+            
+            logger.info(f"Successfully sent approval request to parent: {request_id}")
+        except Exception as e:
+            logger.error(f"Failed to send approval request to parent: {e}")
+            logger.error(f"Request ID: {request_id}, Data: {approval_data}")
+            raise
+    
+    def _lock_system_for_approval(self, request_id: str):
+        """Lock the system and wait for approval"""
+        if request_id not in self.active_requests:
+            logger.error(f"Request {request_id} not found")
+            return
+        
+        request = self.active_requests[request_id]
+        
+        # Set current request
+        self.current_request_id = request_id
+        self.is_system_locked = True
+        
+        # Create approval and timeout callbacks
+        def on_approval():
+            logger.info(f"Lock screen approved for request: {request_id}")
+            # The actual approval will be handled by process_approval_response
+        
+        def on_timeout():
+            logger.info(f"Lock screen timeout for request: {request_id}")
+            self._handle_timeout(request_id)
+        
+        def on_emergency():
+            logger.info(f"Emergency unlock for request: {request_id}")
+            self._handle_emergency_unlock(request_id)
+        
+        # Show lock screen
+        show_system_lock(
+            reason=request.reason,
+            timeout=request.timeout_seconds,
+            approval_callback=on_approval,
+            timeout_callback=on_timeout
+        )
+        
+        # Start timeout monitoring in separate thread
+        timeout_thread = threading.Thread(
+            target=self._monitor_timeout,
+            args=(request_id,),
+            daemon=True
+        )
+        timeout_thread.start()
+    
+    def _monitor_timeout(self, request_id: str):
+        """Monitor request timeout"""
+        if request_id not in self.active_requests:
+            return
+        
+        request = self.active_requests[request_id]
+        start_time = request.timestamp
+        
+        while request.status == ApprovalStatus.PENDING:
+            elapsed = (datetime.now() - start_time).total_seconds()
+            
+            if elapsed >= request.timeout_seconds:
+                logger.info(f"Request {request_id} timed out after {elapsed} seconds")
+                self._handle_timeout(request_id)
+                break
+            
+            time.sleep(1)
+    
+    def process_approval_response(self, request_id: str, approved: bool, 
+                                parent_id: str = "parent-001") -> bool:
+        """
+        Process approval response from parent
+        
+        Args:
+            request_id: Request ID
+            approved: Whether approved or denied
+            parent_id: Parent ID who responded
+            
+        Returns:
+            True if processed successfully
+        """
+        if request_id not in self.active_requests:
+            logger.error(f"Request {request_id} not found")
+            return False
+        
+        request = self.active_requests[request_id]
+        
+        if request.status != ApprovalStatus.PENDING:
+            logger.warning(f"Request {request_id} is not pending (status: {request.status})")
+            return False
+        
+        # Update request
+        request.status = ApprovalStatus.APPROVED if approved else ApprovalStatus.DENIED
+        request.response_time = datetime.now()
+        request.response_data = {
+            "parent_id": parent_id,
+            "approved": approved,
+            "response_time": request.response_time.isoformat()
+        }
+        
+        # Update statistics
+        if approved:
+            self.stats['approved_requests'] += 1
+        else:
+            self.stats['denied_requests'] += 1
+        
+        # Calculate response time
+        response_time = (request.response_time - request.timestamp).total_seconds()
+        self._update_average_response_time(response_time)
+        
+        logger.info(f"Request {request_id} {'approved' if approved else 'denied'} by {parent_id}")
+        
+        # Handle the response
+        if approved:
+            self._handle_approval(request_id)
+        else:
+            self._handle_denial(request_id)
+        
+        # Move to history
+        self.request_history.append(request)
+        del self.active_requests[request_id]
+        
+        return True
+    
+    def _handle_approval(self, request_id: str):
+        """Handle approval response"""
+        logger.info(f"Handling approval for request: {request_id}")
+        
+        # Update lock screen status
+        update_lock_status("Parent approved! Unlocking system...")
+        
+        # Send unlock notification to WebSocket clients
+        self.websocket_server.send_message_to_clients("SYSTEM_UNLOCKED", {
+            "requestId": request_id,
+            "timestamp": datetime.now().isoformat(),
+            "reason": "Parent approved"
+        })
+        
+        # Unlock system immediately
+        self._unlock_system()
+    
+    def _handle_denial(self, request_id: str):
+        """Handle denial response"""
+        logger.info(f"Handling denial for request: {request_id}")
+        
+        # Update lock screen status
+        update_lock_status("Parent denied request. System remains locked.")
+        
+        # Keep system locked - parent can approve later or use emergency unlock
+        # The system will remain locked until manual intervention
+    
+    def _handle_timeout(self, request_id: str):
+        """Handle request timeout"""
+        if request_id not in self.active_requests:
+            return
+        
+        request = self.active_requests[request_id]
+        request.status = ApprovalStatus.TIMEOUT
+        request.response_time = datetime.now()
+        
+        self.stats['timeout_requests'] += 1
+        
+        logger.info(f"Request {request_id} timed out")
+        
+        # Update lock screen
+        update_lock_status("Request timed out. System remains locked.")
+        
+        # Move to history
+        self.request_history.append(request)
+        del self.active_requests[request_id]
+        
+        # Keep system locked until manual intervention
+    
+    def _handle_emergency_unlock(self, request_id: str):
+        """Handle emergency unlock"""
+        if request_id not in self.active_requests:
+            return
+        
+        request = self.active_requests[request_id]
+        request.status = ApprovalStatus.CANCELLED
+        request.response_time = datetime.now()
+        request.response_data = {
+            "emergency_unlock": True,
+            "response_time": request.response_time.isoformat()
+        }
+        
+        logger.info(f"Emergency unlock for request: {request_id}")
+        
+        # Move to history
+        self.request_history.append(request)
+        del self.active_requests[request_id]
+        
+        # Unlock system
+        self._unlock_system()
+    
+    def _unlock_system(self):
+        """Unlock the system"""
+        logger.info("Unlocking system")
+        
+        self.is_system_locked = False
+        self.current_request_id = None
+        
+        # Unlock the lock screen
+        unlock_system()
+    
+    def _update_average_response_time(self, response_time: float):
+        """Update average response time statistics"""
+        total_responses = (self.stats['approved_requests'] + 
+                          self.stats['denied_requests'])
+        
+        if total_responses > 0:
+            current_avg = self.stats['average_response_time']
+            self.stats['average_response_time'] = (
+                (current_avg * (total_responses - 1) + response_time) / total_responses
+            )
+    
+    def cancel_request(self, request_id: str) -> bool:
+        """Cancel an active request"""
+        if request_id not in self.active_requests:
+            logger.error(f"Request {request_id} not found")
+            return False
+        
+        request = self.active_requests[request_id]
+        request.status = ApprovalStatus.CANCELLED
+        request.response_time = datetime.now()
+        
+        logger.info(f"Cancelled request: {request_id}")
+        
+        # Move to history
+        self.request_history.append(request)
+        del self.active_requests[request_id]
+        
+        # If this was the current lock request, unlock
+        if self.current_request_id == request_id:
+            self._unlock_system()
+        
+        return True
+    
+    def get_active_requests(self) -> List[ApprovalRequest]:
+        """Get list of active requests"""
+        return list(self.active_requests.values())
+    
+    def get_request_history(self, limit: int = 50) -> List[ApprovalRequest]:
+        """Get request history"""
+        return self.request_history[-limit:]
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get approval statistics"""
+        return {
+            **self.stats,
+            'active_requests': len(self.active_requests),
+            'system_locked': self.is_system_locked,
+            'current_request_id': self.current_request_id
+        }
+    
+    def is_system_currently_locked(self) -> bool:
+        """Check if system is currently locked"""
+        return self.is_system_locked and is_system_locked()
+
+# Global approval manager instance
+_approval_manager: Optional[ApprovalManager] = None
+
+def get_approval_manager() -> ApprovalManager:
+    """Get or create the global approval manager instance"""
+    global _approval_manager
+    if _approval_manager is None:
+        _approval_manager = ApprovalManager()
+    return _approval_manager
+
+def request_approval(reason: str, content: str = "", **kwargs) -> str:
+    """
+    Request approval and lock system
+    
+    Args:
+        reason: Reason for approval request
+        content: Content that triggered the request
+        **kwargs: Additional parameters
+        
+    Returns:
+        Request ID
+    """
+    # Approval timing - entry point
+    timestamp_approval_start = get_precise_timestamp()
+    log_timing("APPROVAL_REQUEST_START", timestamp_approval_start, content)
+    
+    manager = get_approval_manager()
+    request_id = manager.request_approval_with_lock(
+        reason=reason,
+        content=content,
+        **kwargs
+    )
+    
+    # Approval timing - completion
+    timestamp_approval_end = get_precise_timestamp()
+    log_timing("APPROVAL_REQUEST_END", timestamp_approval_end, content, f"approval_time={(timestamp_approval_end-timestamp_approval_start):.2f}s")
+    
+    return request_id
+
+def process_parent_response(request_id: str, approved: bool, parent_id: str = "parent-001") -> bool:
+    """
+    Process parent approval response
+    
+    Args:
+        request_id: Request ID
+        approved: Whether approved or denied
+        parent_id: Parent ID
+        
+    Returns:
+        True if processed successfully
+    """
+    manager = get_approval_manager()
+    return manager.process_approval_response(request_id, approved, parent_id)
+
+def get_approval_statistics() -> Dict[str, Any]:
+    """Get approval statistics"""
+    manager = get_approval_manager()
+    return manager.get_statistics()
+
+if __name__ == "__main__":
+    # Test the approval manager
+    print("🔐 Testing Approval Manager...")
+    
+    manager = get_approval_manager()
+    
+    # Create test request
+    request_id = manager.request_approval_with_lock(
+        reason="Test inappropriate content detected",
+        content="test content",
+        application_name="Test Browser",
+        confidence=0.85,
+        timeout_seconds=30
+    )
+    
+    print(f"📋 Created request: {request_id}")
+    
+    # Simulate parent approval after 10 seconds
+    def simulate_approval():
+        time.sleep(10)
+        print("📱 Simulating parent approval...")
+        manager.process_approval_response(request_id, True, "parent-001")
+    
+    approval_thread = threading.Thread(target=simulate_approval, daemon=True)
+    approval_thread.start()
+    
+    # Keep main thread alive
+    try:
+        while manager.is_system_currently_locked():
+            time.sleep(1)
+        print("🔓 System unlocked")
+        print("📊 Statistics:", manager.get_statistics())
+    except KeyboardInterrupt:
+        print("\n🛑 Interrupted")
+        manager.cancel_request(request_id) 

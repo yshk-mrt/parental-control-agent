@@ -25,6 +25,7 @@ class DebugWindow:
         self.text_widget = None
         self.status_label = None
         self.debug_queue = queue.Queue()
+        self.status_queue = queue.Queue()
         self.running = False
         self.max_entries = 10
         self.entries = []
@@ -215,6 +216,14 @@ class DebugWindow:
         except queue.Empty:
             pass
         
+        # Process status updates
+        try:
+            while True:
+                status = self.status_queue.get_nowait()
+                self._update_status_ui(status)
+        except queue.Empty:
+            pass
+        
         # Schedule next processing
         if self.root:
             self.root.after(100, self.process_queue)
@@ -314,13 +323,21 @@ class DebugWindow:
             self.root.destroy()
     
     def update_status(self, status: str):
-        """Update the status label"""
+        """Update the status label (thread-safe)"""
+        self.status_queue.put(status)
+    
+    def _update_status_ui(self, status: str):
+        """Update the status label UI (called from main thread)"""
         if self.status_label:
             self.status_label.config(text=f"Status: {status}")
     
     def run(self):
         """Run the debug window (must be called from main thread)"""
         self.create_window()
+        self.running = True
+        self.add_initial_message()
+        # Start processing queues
+        self.root.after(100, self.process_queue)
         self.root.mainloop()
 
 # Global debug window instance
