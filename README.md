@@ -3,6 +3,8 @@
 Endeavor Navi: AI assistant agent for 6-12 year olds and parents. It provides safe, parent-controlled AI exploration, addressing the "Age 13 wall" to ease parent worry and foster kids' curiosity.
 A comprehensive AI-powered parental control system that monitors children's computer usage in real-time using multi-agent architecture and multimodal AI analysis.
 
+Project page: https://devpost.com/software/endeavor-navi
+
 ## Overview
 
 This system provides intelligent monitoring and control of children's computer activities by:
