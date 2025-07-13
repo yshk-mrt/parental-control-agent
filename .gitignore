@@ -2,3 +2,4 @@ keystrokes.log
 .env
 src/__pycache__/
 temp/
+test/__pycache__/
