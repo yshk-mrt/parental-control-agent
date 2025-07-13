@@ -176,9 +176,9 @@ class AnalysisAgent(weave.Model):
         logger.info(f"Analysis Agent initialized for {self.age_group} with {self.strictness_level} strictness")
     
     @weave.op()
-    async def predict(self, input_text: str, screenshot_path: Optional[str] = None) -> AnalysisResult:
+    async def predict(self, input_text: str, screenshot_path: Optional[str] = None) -> Optional[AnalysisResult]:
         """Main prediction method for Weave Model compatibility"""
-        return await self.analyze_input_context(input_text, screenshot_path)
+        return await self.analyze_input_context(input_text, screenshot_path, force_analysis=True)
     
     async def _check_input_completeness(self, input_text: str) -> Dict[str, Any]:
         """Use LLM to check if input appears to be complete or incomplete"""
@@ -262,48 +262,29 @@ Respond with JSON format:
     @weave.op()
     async def analyze_input_context(self, 
                                   input_text: str, 
-                                  screenshot_path: Optional[str] = None) -> AnalysisResult:
+                                  screenshot_path: Optional[str] = None,
+                                  force_analysis: bool = False) -> Optional[AnalysisResult]:
         """
         Analyze input text and screen context for comprehensive assessment
         
         Args:
             input_text: The keyboard input text to analyze
             screenshot_path: Optional path to screenshot image
+            force_analysis: Force analysis even for incomplete inputs (e.g., when Enter is pressed)
             
         Returns:
-            AnalysisResult with comprehensive analysis
+            AnalysisResult with comprehensive analysis, or None if input is incomplete
         """
         start_time = time.time()
         
-        # Check for incomplete input using LLM
-        completeness_check = await self._check_input_completeness(input_text)
-        if not completeness_check["is_complete"]:
-            logger.info(f"LLM detected incomplete input: '{input_text}' - {completeness_check['reason']}")
-            
-            # For incomplete input, return a safe default result without full AI analysis
-            return AnalysisResult(
-                timestamp=datetime.now(),
-                input_text=input_text,
-                screenshot_path=screenshot_path,
-                category="safe",
-                confidence=max(0.5, 1.0 - completeness_check["confidence"]),  # Lower confidence for incomplete input
-                age_appropriateness={
-                    "elementary": True,
-                    "middle_school": True,
-                    "high_school": True
-                },
-                safety_concerns=[],
-                educational_value="neutral",
-                parental_action="monitor",  # Monitor rather than allow/restrict
-                context_summary=f"Incomplete input detected: '{input_text}'. {completeness_check['reason']}",
-                application_detected="unknown",
-                detailed_analysis={
-                    "incomplete_input": True,
-                    "llm_completeness_check": completeness_check,
-                    "original_text": input_text,
-                    "processing_time": time.time() - start_time
-                }
-            )
+        # Check for incomplete input using LLM (unless forced)
+        if not force_analysis:
+            completeness_check = await self._check_input_completeness(input_text)
+            if not completeness_check["is_complete"]:
+                logger.info(f"LLM detected incomplete input: '{input_text}' - {completeness_check['reason']} - Deferring analysis")
+                
+                # Return None to indicate that processing should be deferred
+                return None
         
         # Check cache first
         if self.cache_enabled and self.cache:
@@ -550,9 +531,16 @@ async def analyze_input_context_tool(input_text: str, screenshot_path: Optional[
         Dictionary with analysis results
     """
     agent = get_global_analysis_engine()
-    result = await agent.analyze_input_context(input_text, screenshot_path)
+    result = await agent.analyze_input_context(input_text, screenshot_path, force_analysis=True)
+    
+    if result is None:
+        return {
+            'status': 'incomplete',
+            'message': 'Input appears incomplete, analysis deferred'
+        }
     
     return {
+        'status': 'success',
         'timestamp': result.timestamp.isoformat(),
         'category': result.category,
         'confidence': result.confidence,
@@ -685,7 +673,7 @@ class AnalysisAgentHelper:
         logger.info("Analysis Agent Helper initialized")
     
     @weave.op()
-    async def process_input_event(self, input_text: str, screenshot_path: Optional[str] = None) -> AnalysisResult:
+    async def process_input_event(self, input_text: str, screenshot_path: Optional[str] = None) -> Optional[AnalysisResult]:
         """
         Process an input event and return analysis results
         
@@ -694,9 +682,9 @@ class AnalysisAgentHelper:
             screenshot_path: Optional screenshot path
             
         Returns:
-            AnalysisResult with comprehensive analysis
+            AnalysisResult with comprehensive analysis, or None if incomplete
         """
-        return await self.analysis_engine.analyze_input_context(input_text, screenshot_path)
+        return await self.analysis_engine.analyze_input_context(input_text, screenshot_path, force_analysis=False)
     
     @weave.op()
     def get_statistics(self) -> Dict[str, Any]:

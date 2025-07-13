@@ -385,8 +385,10 @@ class MonitoringAgent(weave.Model):
         
         # Extract text from buffer structure
         input_text = ""
+        enter_pressed = False
         if input_status.get('buffer') and isinstance(input_status['buffer'], dict):
             input_text = input_status['buffer'].get('text', '')
+            enter_pressed = input_status['buffer'].get('enter_pressed', False)
         
         # Skip processing if input is only whitespace/newlines
         if not input_text or not input_text.strip():
@@ -426,10 +428,18 @@ class MonitoringAgent(weave.Model):
                     object.__setattr__(self, 'statistics', new_stats)
             
             # Step 2: Analyze content
+            # Force analysis if Enter was pressed, otherwise let completeness check decide
             analysis_result = await self.analysis_agent.analyze_input_context(
                 event.input_text, 
-                screenshot_path
+                screenshot_path,
+                force_analysis=enter_pressed
             )
+            
+            # If analysis returns None, input is incomplete - keep buffer and wait
+            if analysis_result is None:
+                logger.debug(f"Input incomplete, keeping buffer: '{input_text[:50]}...'")
+                return  # Don't clear buffer, let input continue accumulating
+            
             event.analysis_result = analysis_result
             
             # Update statistics
@@ -465,7 +475,7 @@ class MonitoringAgent(weave.Model):
                 new_stats['notifications_sent'] += 1
                 object.__setattr__(self, 'statistics', new_stats)
             
-            # Step 5: Clear input buffer
+            # Step 5: Clear input buffer only after successful analysis
             context = type('MockToolContext', (), {'state': {}})()
             clear_input_buffer_tool.func(context)
             
@@ -500,31 +510,32 @@ class MonitoringAgent(weave.Model):
             new_stats['errors'] += 1
             object.__setattr__(self, 'statistics', new_stats)
         
-        # Record event in session manager
-        try:
-            event_data = {
-                'event_type': event.event_type,
-                'input_text': event.input_text,
-                'screenshot_path': event.screenshot_path,
-                'analysis_category': event.analysis_result.category if event.analysis_result else None,
-                'analysis_confidence': event.analysis_result.confidence if event.analysis_result else None,
-                'judgment_action': event.judgment_result.action.value if event.judgment_result else None,
-                'judgment_confidence': event.judgment_result.confidence if event.judgment_result else None,
-                'notification_sent': event.notification_sent,
-                'processing_time': event.processing_time,
-                'error': event.error
-            }
-            self.session_manager.record_event(event_data)
-        except Exception as e:
-            logger.error(f"Error recording event: {e}")
-        
-        # Add event to history
-        new_history = list(self.event_history)
-        new_history.append(event)
-        # Keep only last 100 events
-        if len(new_history) > 100:
-            new_history = new_history[-100:]
-        object.__setattr__(self, 'event_history', new_history)
+        # Record event in session manager only if analysis was completed
+        if event.analysis_result is not None:
+            try:
+                event_data = {
+                    'event_type': event.event_type,
+                    'input_text': event.input_text,
+                    'screenshot_path': event.screenshot_path,
+                    'analysis_category': event.analysis_result.category if event.analysis_result else None,
+                    'analysis_confidence': event.analysis_result.confidence if event.analysis_result else None,
+                    'judgment_action': event.judgment_result.action.value if event.judgment_result else None,
+                    'judgment_confidence': event.judgment_result.confidence if event.judgment_result else None,
+                    'notification_sent': event.notification_sent,
+                    'processing_time': event.processing_time,
+                    'error': event.error
+                }
+                self.session_manager.record_event(event_data)
+            except Exception as e:
+                logger.error(f"Error recording event: {e}")
+            
+            # Add event to history only if analysis was completed
+            new_history = list(self.event_history)
+            new_history.append(event)
+            # Keep only last 100 events
+            if len(new_history) > 100:
+                new_history = new_history[-100:]
+            object.__setattr__(self, 'event_history', new_history)
     
     async def _send_appropriate_notification(self, analysis_result: AnalysisResult, judgment_result: JudgmentResult):
         """Send appropriate notification based on analysis and judgment"""
@@ -686,10 +697,11 @@ class MonitoringAgent(weave.Model):
         start_time = time.time()
         
         try:
-            # Step 1: Analyze content
+            # Step 1: Analyze content (force analysis for manual input)
             analysis_result = await self.analysis_agent.analyze_input_context(
                 input_text, 
-                screenshot_path
+                screenshot_path,
+                force_analysis=True  # Always force analysis for manual input
             )
             
             # Step 2: Apply judgment
