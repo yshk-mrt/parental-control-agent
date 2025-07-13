@@ -20,7 +20,7 @@ import json
 import uuid
 
 from lock_screen import show_system_lock, unlock_system, is_system_locked, update_lock_status
-from websocket_server import get_websocket_server
+from websocket_server import get_websocket_server, send_approval_request_via_command
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -192,9 +192,29 @@ class ApprovalManager:
         timestamp_websocket_start = get_precise_timestamp()
         log_timing("WEBSOCKET_SEND_START", timestamp_websocket_start, request.content)
         
-        # Send via WebSocket
+        # Try regular WebSocket first
         try:
             self.websocket_server.send_message_to_clients("APPROVAL_REQUEST", approval_data)
+            
+            # Check if message was actually sent (has clients)
+            if len(self.websocket_server.clients) == 0:
+                logger.warning("No clients connected to WebSocket server, trying command interface")
+                
+                # Try command interface as fallback
+                success = send_approval_request_via_command(
+                    request_id=request.id,
+                    reason=request.reason,
+                    applicationName=request.application_name,
+                    blockedUrl=request.blocked_url,
+                    keywords=request.keywords,
+                    confidence=request.confidence,
+                    childId=request.child_id
+                )
+                
+                if success:
+                    logger.info("Successfully sent approval request via command interface")
+                else:
+                    logger.error("Failed to send approval request via command interface")
             
             # WebSocket timing - end
             timestamp_websocket_end = get_precise_timestamp()
@@ -545,7 +565,7 @@ if __name__ == "__main__":
     try:
         while manager.is_system_currently_locked():
             time.sleep(1)
-        print("🔓 System unlocked")
+        print("�� System unlocked")
         print("📊 Statistics:", manager.get_statistics())
     except KeyboardInterrupt:
         print("\n🛑 Interrupted")

@@ -285,5 +285,5 @@ export class WebSocketService {
   }
 }
 
-// Singleton instance
-export const websocketService = new WebSocketService(); 
+// Create and export a singleton instance
+export const websocketService = new WebSocketService('ws://localhost:8080'); 

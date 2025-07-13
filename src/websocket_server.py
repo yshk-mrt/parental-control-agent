@@ -22,6 +22,9 @@ import websockets
 from websockets.server import WebSocketServerProtocol
 import queue
 
+# Add socket import for the command interface
+import socket
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -80,7 +83,13 @@ class WebSocketServer:
         self.running = False
         self.server = None
         
+        # Command server for external communication
+        self.command_host = "localhost"
+        self.command_port = 8081
+        self.command_server = None
+        
         logger.info(f"WebSocket server initialized on {host}:{port}")
+        logger.info(f"Command server will run on {self.command_host}:{self.command_port}")
     
     async def register_client(self, websocket: WebSocketServerProtocol):
         """Register a new client connection"""
@@ -210,28 +219,95 @@ class WebSocketServer:
     
     async def start_server(self):
         """Start the WebSocket server"""
-        logger.info(f"Starting WebSocket server on {self.host}:{self.port}")
+        if self.running:
+            logger.warning("WebSocket server is already running")
+            return
         
+        self.running = True
+        
+        # Start WebSocket server
         self.server = await websockets.serve(
             self.handle_client,
             self.host,
-            self.port
+            self.port,
+            ping_interval=30,
+            ping_timeout=10
         )
         
-        self.running = True
-        logger.info("WebSocket server started successfully")
+        logger.info(f"WebSocket server started on {self.host}:{self.port}")
         
-        # Start background task to process messages
+        # Start command server
+        await self.start_command_server()
+        
+        # Start message queue processor
         asyncio.create_task(self.process_message_queue())
+        
+        logger.info("WebSocket server and command server are running")
+    
+    async def start_command_server(self):
+        """Start the command server for external communication"""
+        self.command_server = await asyncio.start_server(
+            self.handle_command_client,
+            self.command_host,
+            self.command_port
+        )
+        logger.info(f"Command server started on {self.command_host}:{self.command_port}")
+    
+    async def handle_command_client(self, reader, writer):
+        """Handle command client connections"""
+        try:
+            data = await reader.read(4096)
+            if data:
+                message = data.decode('utf-8')
+                logger.info(f"Received command: {message}")
+                
+                try:
+                    # Parse the command message
+                    command_data = json.loads(message)
+                    
+                    # Add to message queue for processing
+                    self.message_queue.put(command_data)
+                    
+                    # Send acknowledgment
+                    writer.write(b"OK\n")
+                    await writer.drain()
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in command: {e}")
+                    writer.write(b"ERROR: Invalid JSON\n")
+                    await writer.drain()
+                
+        except Exception as e:
+            logger.error(f"Error handling command client: {e}")
+        finally:
+            writer.close()
+            await writer.wait_closed()
     
     async def stop_server(self):
         """Stop the WebSocket server"""
+        if not self.running:
+            return
+        
+        self.running = False
+        
+        # Close all client connections
+        if self.clients:
+            await asyncio.gather(
+                *[client.close() for client in self.clients],
+                return_exceptions=True
+            )
+        
+        # Stop WebSocket server
         if self.server:
-            logger.info("Stopping WebSocket server")
-            self.running = False
             self.server.close()
             await self.server.wait_closed()
-            logger.info("WebSocket server stopped")
+        
+        # Stop command server
+        if self.command_server:
+            self.command_server.close()
+            await self.command_server.wait_closed()
+        
+        logger.info("WebSocket server and command server stopped")
     
     async def process_message_queue(self):
         """Process messages from the message queue"""
@@ -327,7 +403,27 @@ class WebSocketServer:
         
         logger.info(f"Queueing message for clients: {message_type}")
         logger.debug(f"Message data: {data}")
+        logger.info(f"Server instance ID: {id(self)}")
+        logger.info(f"Server running: {self.running}")
         logger.info(f"Connected clients: {len(self.clients)}")
+        
+        # If this server instance has no clients but is supposed to send messages,
+        # try to get the actual running server instance
+        if len(self.clients) == 0 and not self.running:
+            logger.warning("Current server instance has no clients and is not running")
+            logger.warning("This suggests multiple WebSocket server instances exist")
+            
+            # Try to get the global instance
+            global _websocket_server
+            if _websocket_server and _websocket_server != self:
+                logger.info(f"Using global server instance: {id(_websocket_server)}")
+                logger.info(f"Global server running: {_websocket_server.running}")
+                logger.info(f"Global server clients: {len(_websocket_server.clients)}")
+                
+                if _websocket_server.running and len(_websocket_server.clients) > 0:
+                    logger.info("Forwarding message to global server instance")
+                    _websocket_server.message_queue.put(message)
+                    return
         
         self.message_queue.put(message)
     
@@ -377,14 +473,28 @@ def get_websocket_server() -> WebSocketServer:
     global _websocket_server
     if _websocket_server is None:
         _websocket_server = WebSocketServer()
+        logger.info(f"Created new WebSocket server instance: {id(_websocket_server)}")
+    else:
+        logger.debug(f"Returning existing WebSocket server instance: {id(_websocket_server)}")
+        logger.debug(f"Server running: {_websocket_server.running}, clients: {len(_websocket_server.clients)}")
     return _websocket_server
 
 async def start_websocket_server(host: str = "localhost", port: int = 8080):
     """Start the WebSocket server"""
+    global _websocket_server
+    
+    # Ensure we're using the global singleton
     server = get_websocket_server()
     server.host = host
     server.port = port
+    
+    logger.info(f"Starting WebSocket server instance: {id(server)}")
     await server.start_server()
+    
+    # Ensure the global reference is set
+    _websocket_server = server
+    logger.info(f"Global WebSocket server instance set: {id(_websocket_server)}")
+    
     return server
 
 async def stop_websocket_server():
@@ -412,6 +522,31 @@ def send_approval_request(request_id: str, reason: str, **kwargs):
         "timestamp": datetime.now().isoformat(),
         **kwargs
     })
+
+def send_approval_request_via_command(request_id: str, reason: str, **kwargs):
+    """Send approval request via command interface to running server"""
+    message = {
+        "type": "APPROVAL_REQUEST",
+        "data": {
+            "id": request_id,
+            "reason": reason,
+            "timestamp": datetime.now().isoformat(),
+            **kwargs
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    try:
+        # Connect to command server
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.connect(("localhost", 8081))
+            sock.send(json.dumps(message).encode('utf-8'))
+            response = sock.recv(1024).decode('utf-8')
+            logger.info(f"Command server response: {response}")
+            return True
+    except Exception as e:
+        logger.error(f"Failed to send command to server: {e}")
+        return False
 
 def send_activity_update(application_name: str, duration: int, category: str, **kwargs):
     """Send activity update to parent dashboard"""

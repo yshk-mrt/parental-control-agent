@@ -8,7 +8,7 @@ import Button from './components/common/Button';
 import ThemeToggle from './components/common/ThemeToggle';
 
 const AppContent: React.FC = () => {
-  const { state, connect, disconnect } = useParentDashboard();
+  const { state, connect, disconnect, sendApprovalResponse } = useParentDashboard();
 
   useEffect(() => {
     // Auto-connect to WebSocket when component mounts
@@ -26,6 +26,11 @@ const AppContent: React.FC = () => {
 
   const handleDisconnect = () => {
     disconnect();
+  };
+
+  const handleApprovalResponse = (requestId: string, approved: boolean) => {
+    console.log(`${approved ? 'Approving' : 'Denying'} request:`, requestId);
+    sendApprovalResponse(requestId, approved);
   };
 
   return (
@@ -125,20 +130,14 @@ const AppContent: React.FC = () => {
                           <Button 
                             size="sm" 
                             variant="primary"
-                            onClick={() => {
-                              // TODO: Implement approval logic
-                              console.log('Approved:', request.id);
-                            }}
+                            onClick={() => handleApprovalResponse(request.id, true)}
                           >
                             Approve
                           </Button>
                           <Button 
                             size="sm" 
                             variant="destructive"
-                            onClick={() => {
-                              // TODO: Implement denial logic
-                              console.log('Denied:', request.id);
-                            }}
+                            onClick={() => handleApprovalResponse(request.id, false)}
                           >
                             Deny
                           </Button>
