@@ -3,3 +3,4 @@ keystrokes.log
 src/__pycache__/
 temp/
 test/__pycache__/
+data/
