@@ -9,15 +9,17 @@ This module manages approval requests and integrates with:
 """
 
 import asyncio
+import json
+import logging
 import threading
 import time
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Callable, List
-from dataclasses import dataclass, field
-from enum import Enum
-import json
 import uuid
+from datetime import datetime
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+from typing import Dict, List, Optional, Any
+import os
+import fcntl  # For file locking
 
 from lock_screen import show_system_lock, unlock_system, is_system_locked, update_lock_status
 from websocket_server import get_websocket_server, send_approval_request_via_command
@@ -26,14 +28,19 @@ from websocket_server import get_websocket_server, send_approval_request_via_com
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Timing utilities for performance analysis
+# Timing utilities
 def get_precise_timestamp():
-    """Get high-precision timestamp for performance analysis"""
     return time.time()
 
-def log_timing(phase: str, timestamp: float, input_text: str = "", extra_info: str = ""):
-    """Log timing information for performance analysis"""
-    logger.info(f"⏱️ TIMING [{phase}] {timestamp:.6f}s - {input_text[:20]}{'...' if len(input_text) > 20 else ''} {extra_info}")
+def log_timing(event_name: str, timestamp: float, content: str = "", extra_info: str = ""):
+    logger.info(f"⏱️ TIMING [{event_name}] {timestamp}s - {content[:20]}{'...' if len(content) > 20 else ''} {extra_info}")
+
+# File paths for persistence
+APPROVAL_REQUESTS_FILE = "temp/approval_requests.json"
+APPROVAL_HISTORY_FILE = "temp/approval_history.json"
+
+# Ensure temp directory exists
+os.makedirs("temp", exist_ok=True)
 
 class ApprovalStatus(Enum):
     """Status of approval request"""
@@ -72,6 +79,9 @@ class ApprovalManager:
         self.is_system_locked = False
         self.current_request_id = None
         
+        # Load existing requests from file
+        self._load_requests()
+        
         # Statistics
         self.stats = {
             'total_requests': 0,
@@ -82,6 +92,70 @@ class ApprovalManager:
         }
         
         logger.info("Approval Manager initialized")
+    
+    def _load_requests(self):
+        """Load approval requests from file"""
+        try:
+            if os.path.exists(APPROVAL_REQUESTS_FILE):
+                with open(APPROVAL_REQUESTS_FILE, 'r') as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)  # Shared lock for reading
+                    data = json.load(f)
+                    
+                    # Convert back to ApprovalRequest objects
+                    for request_data in data:
+                        request = ApprovalRequest(
+                            id=request_data['id'],
+                            reason=request_data['reason'],
+                            timestamp=datetime.fromisoformat(request_data['timestamp']),
+                            content=request_data.get('content', ''),
+                            application_name=request_data.get('application_name', 'Unknown'),
+                            blocked_url=request_data.get('blocked_url'),
+                            keywords=request_data.get('keywords', []),
+                            confidence=request_data.get('confidence', 0.0),
+                            child_id=request_data.get('child_id', 'child-001'),
+                            parent_id=request_data.get('parent_id', 'parent-001'),
+                            status=ApprovalStatus(request_data.get('status', 'pending')),
+                            timeout_seconds=request_data.get('timeout_seconds', 300),
+                            response_time=datetime.fromisoformat(request_data['response_time']) if request_data.get('response_time') else None,
+                            response_data=request_data.get('response_data', {})
+                        )
+                        self.active_requests[request.id] = request
+                    
+                    logger.info(f"Loaded {len(self.active_requests)} active requests from file")
+        except Exception as e:
+            logger.error(f"Error loading requests: {e}")
+    
+    def _save_requests(self):
+        """Save approval requests to file"""
+        try:
+            # Convert ApprovalRequest objects to dictionaries
+            data = []
+            for request in self.active_requests.values():
+                request_dict = {
+                    'id': request.id,
+                    'reason': request.reason,
+                    'timestamp': request.timestamp.isoformat(),
+                    'content': request.content,
+                    'application_name': request.application_name,
+                    'blocked_url': request.blocked_url,
+                    'keywords': request.keywords,
+                    'confidence': request.confidence,
+                    'child_id': request.child_id,
+                    'parent_id': request.parent_id,
+                    'status': request.status.value,
+                    'timeout_seconds': request.timeout_seconds,
+                    'response_time': request.response_time.isoformat() if request.response_time else None,
+                    'response_data': request.response_data
+                }
+                data.append(request_dict)
+            
+            with open(APPROVAL_REQUESTS_FILE, 'w') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # Exclusive lock for writing
+                json.dump(data, f, indent=2)
+            
+            logger.debug(f"Saved {len(data)} active requests to file")
+        except Exception as e:
+            logger.error(f"Error saving requests: {e}")
     
     def create_approval_request(self, reason: str, content: str = "", 
                               application_name: str = "Unknown",
@@ -120,6 +194,9 @@ class ApprovalManager:
         
         self.active_requests[request_id] = request
         self.stats['total_requests'] += 1
+        
+        # Save to file
+        self._save_requests()
         
         logger.info(f"Created approval request: {request_id} - {reason}")
         
@@ -298,8 +375,12 @@ class ApprovalManager:
         Returns:
             True if processed successfully
         """
+        # Reload requests from file to get latest state
+        self._load_requests()
+        
         if request_id not in self.active_requests:
-            logger.error(f"Request {request_id} not found")
+            logger.error(f"Request {request_id} not found in active requests")
+            logger.info(f"Available requests: {list(self.active_requests.keys())}")
             return False
         
         request = self.active_requests[request_id]
@@ -339,6 +420,9 @@ class ApprovalManager:
         self.request_history.append(request)
         del self.active_requests[request_id]
         
+        # Save updated state to file
+        self._save_requests()
+        
         return True
     
     def _handle_approval(self, request_id: str):
@@ -348,12 +432,31 @@ class ApprovalManager:
         # Update lock screen status
         update_lock_status("Parent approved! Unlocking system...")
         
-        # Send unlock notification to WebSocket clients
-        self.websocket_server.send_message_to_clients("SYSTEM_UNLOCKED", {
-            "requestId": request_id,
-            "timestamp": datetime.now().isoformat(),
-            "reason": "Parent approved"
-        })
+        # Send unlock notification to WebSocket clients via command interface
+        try:
+            unlock_message = {
+                "type": "SYSTEM_UNLOCKED",
+                "data": {
+                    "requestId": request_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "reason": "Parent approved"
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Try command interface first
+            success = self._send_via_command_interface(unlock_message)
+            
+            if not success:
+                # Fallback to regular WebSocket server
+                self.websocket_server.send_message_to_clients("SYSTEM_UNLOCKED", {
+                    "requestId": request_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "reason": "Parent approved"
+                })
+                
+        except Exception as e:
+            logger.error(f"Failed to send unlock notification: {e}")
         
         # Unlock system immediately
         self._unlock_system()
@@ -475,6 +578,20 @@ class ApprovalManager:
     def is_system_currently_locked(self) -> bool:
         """Check if system is currently locked"""
         return self.is_system_locked and is_system_locked()
+
+    def _send_via_command_interface(self, message: dict) -> bool:
+        """Send message via command interface"""
+        try:
+            import socket
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.connect(("localhost", 8081))
+                sock.send(json.dumps(message).encode('utf-8'))
+                response = sock.recv(1024).decode('utf-8')
+                logger.info(f"Command interface response: {response}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to send via command interface: {e}")
+            return False
 
 # Global approval manager instance
 _approval_manager: Optional[ApprovalManager] = None

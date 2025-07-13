@@ -486,9 +486,17 @@ if __name__ == "__main__":
     def unlock_screen(self):
         """Unlock the screen"""
         if not self.is_locked:
-            logger.warning("Screen is not locked")
+            logger.info("Screen not locked in this process – sending global unlock signal")
+            try:
+                # Create unlock signal file so any subprocess lock screen can detect it
+                with open('/tmp/unlock_signal', 'w') as f:
+                    f.write('unlock')
+                # Give the subprocess a moment to read the file
+                time.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Failed to write global unlock signal: {e}")
             return
-        
+
         logger.info("Unlocking screen")
         
         # Set stop event
