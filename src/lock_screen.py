@@ -27,6 +27,17 @@ import subprocess
 import multiprocessing
 import signal
 
+# Import Cocoa overlay
+try:
+    from . import cocoa_overlay
+    COCOA_OVERLAY_AVAILABLE = cocoa_overlay.is_overlay_available()
+except ImportError:
+    try:
+        import cocoa_overlay
+        COCOA_OVERLAY_AVAILABLE = cocoa_overlay.is_overlay_available()
+    except ImportError:
+        COCOA_OVERLAY_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -103,14 +114,19 @@ class SystemLockScreen:
         
         logger.info(f"Showing lock screen: {self.lock_reason}")
         
-        # Check if we're on the main thread
-        if threading.current_thread() is threading.main_thread():
-            # Already on main thread, run directly
-            self._show_lock_screen_thread()
+        # Try Cocoa overlay first (best option for macOS)
+        if COCOA_OVERLAY_AVAILABLE and sys.platform == 'darwin':
+            logger.info("Using Cocoa overlay for lock screen")
+            self._show_cocoa_overlay()
         else:
-            # We're on a background thread - use subprocess approach for macOS compatibility
-            logger.info("Running lock screen in subprocess for macOS compatibility")
-            self._run_lock_screen_subprocess()
+            # Fallback to Tkinter-based approaches
+            if threading.current_thread() is threading.main_thread():
+                # Already on main thread, run directly
+                self._show_lock_screen_thread()
+            else:
+                # We're on a background thread - use subprocess approach for macOS compatibility
+                logger.info("Running lock screen in subprocess for macOS compatibility")
+                self._run_lock_screen_subprocess()
     
     def _run_lock_screen_subprocess(self):
         """Run lock screen in subprocess for macOS compatibility"""
@@ -127,9 +143,27 @@ class SimpleLockScreen:
         self.root = tk.Tk()
         self.root.title("System Locked")
         self.root.attributes('-topmost', True)
-        self.root.attributes('-fullscreen', True)
+        # Cover current screen accurately using AppKit when available
+        try:
+            from AppKit import NSScreen  # type: ignore
+            f = NSScreen.mainScreen().frame()
+            sw = int(f.size.width)
+            sh = int(f.size.height)
+        except Exception:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+
+        self.root.geometry("%dx%d+0+0" % (sw, sh))
+        self.root.update_idletasks()
+        oy = self.root.winfo_rooty()
+        if oy > 0:
+            self.root.geometry("%dx%d+0-%d" % (sw, sh + oy, oy))
         self.root.configure(bg="#1a1a1a")
-        self.root.overrideredirect(True)
+        self.root.overrideredirect(False)
+        self.root.resizable(False, False)
+        self.root.protocol("WM_DELETE_WINDOW", lambda: None)
+        for seq in ("<Command-w>", "<Command-m>"):
+            self.root.bind(seq, lambda e: 'break')
         
         # Create UI
         main_frame = tk.Frame(self.root, bg="#1a1a1a")
@@ -178,6 +212,19 @@ class SimpleLockScreen:
         
         # Check for unlock signal file
         self.check_unlock()
+
+        # Enforcement loop to stay at (0,0) and restore if minimized
+        self.enforce()
+
+    def enforce(self):
+        try:
+            if self.root.state() == 'iconic':
+                self.root.deiconify()
+            if self.root.winfo_rootx() != 0 or self.root.winfo_rooty() != 0:
+                self.root.geometry("%dx%d+0+0" % (sw, sh))
+        except Exception:
+            pass
+        self.root.after(200, self.enforce)
         
     def check_unlock(self):
         import os
@@ -216,6 +263,93 @@ if __name__ == "__main__":
             logger.error(f"Error starting lock screen subprocess: {e}")
             # Fallback to notification
             self._show_notification_fallback()
+    
+    def _show_cocoa_overlay(self):
+        """Show lock screen using Cocoa overlay"""
+        try:
+            self.is_locked = True
+            self.start_time = datetime.now()
+            
+            # Use the new independent Cocoa application
+            import subprocess
+            import sys
+            
+            # Launch the independent Cocoa lock screen application
+            cocoa_script_path = os.path.join(os.path.dirname(__file__), 'cocoa_lock_screen.py')
+            
+            # Prepare arguments
+            args = [
+                sys.executable, cocoa_script_path,
+                '--reason', self.lock_reason,
+                '--timeout', str(self.config.timeout_seconds)
+            ]
+            
+            logger.info(f"Launching independent Cocoa lock screen: {' '.join(args)}")
+            
+            # Start the Cocoa lock screen process
+            self.cocoa_process = subprocess.Popen(args)
+            
+            # Start monitoring thread for status updates and timeout
+            self.update_thread = threading.Thread(target=self._monitor_cocoa_overlay, daemon=True)
+            self.update_thread.start()
+            
+            logger.info("Independent Cocoa lock screen started successfully")
+            
+        except Exception as e:
+            logger.error(f"Error showing independent Cocoa lock screen: {e}")
+            # Fallback to subprocess approach
+            self._run_lock_screen_subprocess()
+    
+    def _monitor_cocoa_overlay(self):
+        """Monitor independent Cocoa application status"""
+        while self.is_locked and not self.stop_event.is_set():
+            try:
+                # Check if the Cocoa process is still running
+                if hasattr(self, 'cocoa_process') and self.cocoa_process.poll() is not None:
+                    # Process ended, which means it was unlocked
+                    logger.info("Independent Cocoa lock screen process ended")
+                    self.is_locked = False
+                    break
+                
+                # Update status based on elapsed time
+                if self.start_time:
+                    elapsed = (datetime.now() - self.start_time).total_seconds()
+                    if self.config.timeout_seconds > 0:
+                        remaining = max(0, self.config.timeout_seconds - elapsed)
+                        if remaining > 0:
+                            minutes = int(remaining // 60)
+                            seconds = int(remaining % 60)
+                            status = f"Waiting for parent approval... ({minutes:02d}:{seconds:02d})"
+                        else:
+                            status = "Request timed out"
+                            # Trigger timeout handling
+                            if self.timeout_callback:
+                                try:
+                                    self.timeout_callback()
+                                except Exception as e:
+                                    logger.error(f"Error in timeout callback: {e}")
+                            
+                            # Create unlock signal for the independent Cocoa app
+                            try:
+                                with open('/tmp/cocoa_lock_unlock', 'w') as f:
+                                    f.write('unlock')
+                                logger.info("Created timeout unlock signal for independent Cocoa app")
+                            except Exception as e:
+                                logger.error(f"Failed to create timeout unlock signal: {e}")
+                            
+                            self.is_locked = False
+                            break
+                    else:
+                        status = "Waiting for parent approval..."
+                    
+                    # Log the status (since we can't directly update the independent app)
+                    logger.debug(f"Independent Cocoa lock screen status: {status}")
+                
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Error in independent Cocoa application monitoring: {e}")
+                time.sleep(1)
     
     def _monitor_subprocess(self):
         """Monitor the subprocess and handle timeout"""
@@ -264,11 +398,36 @@ if __name__ == "__main__":
             
             # Configure window to be always on top and fullscreen
             self.root.attributes('-topmost', True)
-            self.root.attributes('-fullscreen', True)
+            # Use macOS AppKit to fetch the full physical screen size (includes menu bar)
+            # so the overlay matches the real resolution. Fallback to Tk values on other OSes.
+            try:
+                from Quartz import CGMainDisplayID, CGDisplayBounds  # type: ignore
+                bounds = CGDisplayBounds(CGMainDisplayID())
+                screen_w = int(bounds.size.width)
+                screen_h = int(bounds.size.height)
+            except Exception:
+                screen_w = self.root.winfo_screenwidth()
+                screen_h = self.root.winfo_screenheight()
+
+            self.root.geometry("%dx%d+0+0" % (screen_w, screen_h))
+
+            # If macOS menu-bar pushes window down (root y offset > 0),
+            # extend height so black overlay covers the visible gap.
+            self.root.update_idletasks()
+            off_y = self.root.winfo_rooty()
+            if off_y > 0:
+                adj_h = screen_h + off_y
+                # move window up by offset (negative y) so it starts at very top
+                self.root.geometry("%dx%d+0-%d" % (screen_w, adj_h, off_y))
             self.root.configure(bg=self.config.background_color)
             
-            # Disable window manager decorations
-            self.root.overrideredirect(True)
+            # Keep native title-bar (prevents OS from shifting the window) but disable all window controls
+            self.root.overrideredirect(False)
+            self.root.resizable(False, False)
+            # Disable close / minimize / zoom
+            self.root.protocol("WM_DELETE_WINDOW", lambda: None)
+            for seq in ("<Command-w>", "<Command-m>"):
+                self.root.bind(seq, lambda e: "break")
             
             # Bind escape key for emergency unlock (if enabled)
             if self.config.allow_emergency_unlock:
@@ -444,6 +603,21 @@ if __name__ == "__main__":
         self.root.focus_set()
         self.root.grab_set()
     
+    def _enforce_position(self):
+        """Ensure window remains top-left and not minimized"""
+        if not self.is_locked or not self.root:
+            return
+        try:
+            if self.root.state() == 'iconic':
+                self.root.deiconify()
+            x = self.root.winfo_rootx()
+            y = self.root.winfo_rooty()
+            if x != 0 or y != 0:
+                self.root.geometry("%dx%d+0+0" % (self._screen_w, self._screen_h))
+        except Exception:
+            pass
+        self.root.after(200, self._enforce_position)
+    
     def _on_closing(self):
         """Handle window close attempts"""
         logger.info("Lock screen close attempt blocked")
@@ -486,21 +660,57 @@ if __name__ == "__main__":
     def unlock_screen(self):
         """Unlock the screen"""
         if not self.is_locked:
-            logger.info("Screen not locked in this process – sending global unlock signal")
+            logger.info("Screen not locked in this process – sending global unlock signals")
             try:
-                # Create unlock signal file so any subprocess lock screen can detect it
-                with open('/tmp/unlock_signal', 'w') as f:
-                    f.write('unlock')
-                # Give the subprocess a moment to read the file
+                # Create unlock signal files for all possible lock screen implementations
+                signal_files = [
+                    '/tmp/unlock_signal',           # For subprocess lock screen
+                    '/tmp/cocoa_overlay_unlock',    # For old Cocoa overlay
+                    '/tmp/cocoa_lock_unlock'        # For new independent Cocoa application
+                ]
+                
+                for signal_file in signal_files:
+                    try:
+                        with open(signal_file, 'w') as f:
+                            f.write('unlock')
+                        logger.info(f"Created unlock signal: {signal_file}")
+                    except Exception as e:
+                        logger.error(f"Failed to create unlock signal {signal_file}: {e}")
+                
+                # Give the processes a moment to read the files
                 time.sleep(0.5)
+                
+                # Clean up signal files after a delay
+                def cleanup_signals():
+                    time.sleep(2)
+                    for signal_file in signal_files:
+                        try:
+                            if os.path.exists(signal_file):
+                                os.remove(signal_file)
+                                logger.info(f"Cleaned up signal file: {signal_file}")
+                        except Exception as e:
+                            logger.error(f"Failed to clean up signal file {signal_file}: {e}")
+                
+                cleanup_thread = threading.Thread(target=cleanup_signals, daemon=True)
+                cleanup_thread.start()
+                
             except Exception as e:
-                logger.error(f"Failed to write global unlock signal: {e}")
+                logger.error(f"Failed to write global unlock signals: {e}")
             return
 
         logger.info("Unlocking screen")
         
         # Set stop event
         self.stop_event.set()
+        
+        # Handle Cocoa overlay unlock
+        if COCOA_OVERLAY_AVAILABLE and sys.platform == 'darwin':
+            try:
+                # The independent Cocoa application handles its own unlock.
+                # No need to send a signal file here.
+                logger.info("Independent Cocoa lock screen unlocked")
+            except Exception as e:
+                logger.error(f"Error unlocking independent Cocoa lock screen: {e}")
         
         # Handle subprocess unlock
         if hasattr(self, 'lock_process'):

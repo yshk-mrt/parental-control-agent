@@ -51,3 +51,8 @@ pytest-asyncio>=0.21.0
 black>=23.0.0
 flake8>=6.0.0
 mypy>=1.0.0
+
+# macOS Cocoa overlay support
+pyobjc-core>=10.0
+PyObjC-framework-Cocoa>=10.0
+PyObjC-framework-Quartz>=10.0

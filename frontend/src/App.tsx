@@ -1,14 +1,20 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ParentDashboardProvider, useParentDashboard } from './contexts/ParentDashboardContext';
 import { SystemStatusMonitor } from './components/parent/SystemStatusMonitor';
+import LearningDashboard from './components/dashboard/LearningDashboard';
+import ApprovalModal from './components/parent/ApprovalModal';
 import { Layout, Container, PageHeader } from './components/common/Layout';
 import { Card, CardHeader, CardContent } from './components/common/Card';
 import Button from './components/common/Button';
 import ThemeToggle from './components/common/ThemeToggle';
+import Icon from './components/common/Icon';
+import { Monitor, BookOpen, Settings } from 'lucide-react';
 
 const AppContent: React.FC = () => {
   const { state, connect, disconnect, sendApprovalResponse } = useParentDashboard();
+  const [currentView, setCurrentView] = useState<'dashboard' | 'learning' | 'settings'>('dashboard');
+  const [selectedRequest, setSelectedRequest] = useState<any>(null);
 
   useEffect(() => {
     // Auto-connect to WebSocket when component mounts
@@ -33,6 +39,23 @@ const AppContent: React.FC = () => {
     sendApprovalResponse(requestId, approved);
   };
 
+  const handleRequestClick = (request: any) => {
+    // Add mock data for demonstration
+    const enhancedRequest = {
+      ...request,
+      screenshot: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgZmlsbD0iI2Y3ZjlmMyIvPgogIDx0ZXh0IHg9IjIwMCIgeT0iMTUwIiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIGZpbGw9IiM2NjY2NjYiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlNjcmVlbnNob3QgUHJldmlldyBVbmF2YWlsYWJsZTwvdGV4dD4KPC9zdmc+',
+      context: 'Child was attempting to access educational content about dinosaurs, but the AI detected some potentially inappropriate language in the search query.',
+      riskLevel: 'medium' as const
+    };
+    setSelectedRequest(enhancedRequest);
+  };
+
+  const navigationItems = [
+    { id: 'dashboard', label: 'System Status', icon: Monitor },
+    { id: 'learning', label: 'Learning Dashboard', icon: BookOpen },
+    { id: 'settings', label: 'Settings', icon: Settings },
+  ];
+
   return (
     <Layout>
       <Container maxWidth="2xl" className="py-8">
@@ -44,10 +67,29 @@ const AppContent: React.FC = () => {
           <ThemeToggle />
         </div>
 
-        {/* System Status Monitor */}
-        <SystemStatusMonitor />
+        {/* Navigation */}
+        <div className="flex space-x-1 mb-8 bg-muted/30 p-1 rounded-lg">
+          {navigationItems.map((item) => (
+            <Button
+              key={item.id}
+              variant={currentView === item.id ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setCurrentView(item.id as any)}
+              className="flex items-center gap-2"
+            >
+              <Icon icon={item.icon} className="w-4 h-4" />
+              {item.label}
+            </Button>
+          ))}
+        </div>
 
-        <div className="space-y-6">
+        {/* Content based on current view */}
+        {currentView === 'dashboard' && (
+          <>
+            {/* System Status Monitor */}
+            <SystemStatusMonitor />
+
+            <div className="space-y-6">
           {/* Connection Control */}
           <Card>
             <CardHeader>
@@ -118,9 +160,9 @@ const AppContent: React.FC = () => {
               ) : (
                 <div className="space-y-4">
                   {state.approvalRequests.map((request) => (
-                    <div key={request.id} className="border rounded-lg p-4">
+                    <div key={request.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors cursor-pointer">
                       <div className="flex justify-between items-start mb-2">
-                        <div>
+                        <div onClick={() => handleRequestClick(request)} className="flex-1">
                           <h3 className="font-semibold">{request.reason}</h3>
                           <p className="text-sm text-muted-foreground">
                             {request.applicationName || 'Unknown App'} - {new Date(request.timestamp).toLocaleString('en-US')}
@@ -156,23 +198,13 @@ const AppContent: React.FC = () => {
                       <div className="text-xs text-muted-foreground">
                         AI Confidence: {Math.round(request.confidence * 100)}%
                       </div>
+                      <div className="text-xs text-muted-foreground mt-2">
+                        Click for detailed view
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Learning Dashboard */}
-          <Card>
-            <CardHeader>
-              <h2 className="text-xl font-semibold">Learning Dashboard</h2>
-              <p className="text-muted-foreground">
-                Track your child's learning progress and interests
-              </p>
-            </CardHeader>
-            <CardContent>
-              <Button variant="outline">Show Dashboard</Button>
             </CardContent>
           </Card>
 
@@ -198,7 +230,38 @@ const AppContent: React.FC = () => {
               </div>
             </CardContent>
           </Card>
-        </div>
+            </div>
+          </>
+        )}
+
+        {currentView === 'learning' && <LearningDashboard />}
+
+        {currentView === 'settings' && (
+          <Card>
+            <CardHeader>
+              <h2 className="text-xl font-semibold">Settings</h2>
+              <p className="text-muted-foreground">
+                Configure monitoring rules and preferences
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="text-center py-8 text-muted-foreground">
+                Settings panel coming soon...
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Enhanced Approval Modal */}
+        {selectedRequest && (
+          <ApprovalModal
+            request={selectedRequest}
+            isOpen={!!selectedRequest}
+            onClose={() => setSelectedRequest(null)}
+            onApprove={(requestId) => handleApprovalResponse(requestId, true)}
+            onDeny={(requestId) => handleApprovalResponse(requestId, false)}
+          />
+        )}
       </Container>
     </Layout>
   );

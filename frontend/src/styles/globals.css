@@ -22,7 +22,9 @@
   --accent-foreground: #000000;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --border: #000000;
+  --success: #10b981;
+  --success-foreground: #ffffff;
+  --border: #e5e7eb;
   --input: #737373;
   --ring: #a5b4fc;
   --chart-1: #4f46e5;
@@ -71,6 +73,8 @@
   --accent-foreground: #000000;
   --destructive: #f87171;
   --destructive-foreground: #000000;
+  --success: #4ade80;
+  --success-foreground: #000000;
   --border: #545454;
   --input: #ffffff;
   --ring: #818cf8;
@@ -108,22 +112,24 @@ body {
   color: var(--foreground);
 }
 
-/* Custom utility classes */
-.keyword {
-  transition: transform 0.2s ease-in-out;
-}
+@layer utilities {
+  /* Custom utility classes */
+  .keyword {
+    transition: transform 0.2s ease-in-out;
+  }
 
-.keyword:hover {
-  transform: scale(1.1);
-}
+  .keyword:hover {
+    transform: scale(1.1);
+  }
 
-/* Gradient text utility */
-.gradient-text {
-  background: linear-gradient(to right, #6366f1, #a855f7);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  color: transparent;
+  /* Gradient text utility */
+  .gradient-text {
+    background: linear-gradient(to right, #6366f1, #a855f7);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    color: transparent;
+  }
 }
 
 /* Mobile responsive utilities */
@@ -134,5 +140,140 @@ body {
   
   .mobile-full-width {
     width: 100%;
+  }
+}
+
+/* Enhanced dashboard animations */
+@layer utilities {
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.8;
+    }
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
+
+  .animate-pulse-soft {
+    animation: pulse 2s ease-in-out infinite;
+  }
+}
+
+@layer components {
+  /* Enhanced card hover effects */
+  .card-hover {
+    transition: all 0.2s ease-in-out;
+  }
+
+  .card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+
+  /* Progress bar animations */
+  .progress-bar {
+    transition: width 0.5s ease-in-out;
+  }
+}
+
+@layer components {
+  /* Status indicators */
+  .status-indicator {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .status-indicator::before {
+    content: '';
+    position: absolute;
+    left: -8px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  /* Learning timeline styles */
+  .timeline-item {
+    position: relative;
+    padding-left: 2rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.5rem;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--primary);
+  }
+
+  .timeline-item:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 1.5rem;
+    width: 2px;
+    height: calc(100% + 0.5rem);
+    background: var(--muted);
+  }
+
+  /* Interest keyword cloud */
+  .interest-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 1rem;
+    background: linear-gradient(135deg, rgba(240, 240, 240, 0.3), rgba(240, 240, 240, 0.1));
+    border-radius: 0.5rem;
+  }
+
+  .interest-keyword {
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: all 0.2s ease-in-out;
+    cursor: pointer;
+  }
+
+  .interest-keyword:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   }
 } 
