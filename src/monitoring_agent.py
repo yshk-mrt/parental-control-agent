@@ -138,7 +138,7 @@ class MonitoringAgent(weave.Model):
     # Define model configuration to allow extra fields
     model_config = {"extra": "allow"}
     
-    def __init__(self, config: Optional[MonitoringConfig] = None):
+    def __init__(self, config: Optional[MonitoringConfig] = None, debug_window=None):
         super().__init__()
         
         # Use object.__setattr__ to set attributes on Pydantic model
@@ -188,7 +188,26 @@ class MonitoringAgent(weave.Model):
             'uptime': 0.0
         })
         
+        # Store debug window reference
+        object.__setattr__(self, 'debug_window', debug_window)
+        
         logger.info(f"Monitoring Agent initialized for {self.config.age_group} with {self.config.strictness_level} strictness")
+    
+    def log_debug_entry(self, input_text: str, status: str, category: str = "unknown", 
+                       action: str = "unknown", confidence: float = 0.0, error: str = None):
+        """Log debug entry to debug window if available"""
+        if self.debug_window:
+            try:
+                self.debug_window.log_debug_entry(
+                    input_text=input_text,
+                    status=status,
+                    category=category,
+                    action=action,
+                    confidence=confidence,
+                    error=error
+                )
+            except Exception as e:
+                logging.error(f"Error logging to debug window: {e}")
     
     @weave.op()
     async def start_monitoring(self, session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -401,6 +420,9 @@ class MonitoringAgent(weave.Model):
                 logger.error(f"Error clearing input buffer: {e}")
             return
         
+        # Log debug entry - processing started
+        self.log_debug_entry(input_text, "processing")
+        
         event = MonitoringEvent(
             timestamp=datetime.now(),
             event_type="input_complete",
@@ -428,16 +450,48 @@ class MonitoringAgent(weave.Model):
                     object.__setattr__(self, 'statistics', new_stats)
             
             # Step 2: Analyze content
-            # Force analysis if Enter was pressed, otherwise let completeness check decide
+            # Even if Enter was pressed, don't analyze obviously incomplete inputs
+            should_force_analysis = enter_pressed
+            
+            # Override force analysis for obviously incomplete inputs
+            if enter_pressed:
+                stripped_text = input_text.strip()
+                
+                # Don't analyze very short inputs
+                if len(stripped_text) <= 2:
+                    logger.debug(f"Enter pressed but input too short ('{input_text}'), not forcing analysis")
+                    should_force_analysis = False
+                # Don't analyze single common words that are likely incomplete
+                elif stripped_text.lower() in ['i', 'a', 'an', 'the', 'what', 'how', 'where', 'when', 'why']:
+                    logger.debug(f"Enter pressed but input is incomplete word ('{input_text}'), not forcing analysis")
+                    should_force_analysis = False
+                # Don't analyze if it looks like a fragment (word + short word or misspelling)
+                elif len(stripped_text.split()) == 2:
+                    words = stripped_text.split()
+                    # Check if second word is very short or looks like a misspelling/fragment
+                    if len(words[1]) <= 2:  # Second word is very short
+                        logger.debug(f"Enter pressed but input looks like fragment ('{input_text}'), not forcing analysis")
+                        should_force_analysis = False
+                    # Check for common incomplete patterns like "an nakid", "a goo", etc.
+                    elif words[0].lower() in ['an', 'a'] and len(words[1]) <= 6:
+                        logger.debug(f"Enter pressed but input looks like incomplete article+noun ('{input_text}'), not forcing analysis")
+                        should_force_analysis = False
+                # Don't analyze if it ends with a space and is short
+                elif input_text.endswith(' ') and len(stripped_text.split()) <= 2:
+                    logger.debug(f"Enter pressed but input ends with space and is short ('{input_text}'), not forcing analysis")
+                    should_force_analysis = False
+            
             analysis_result = await self.analysis_agent.analyze_input_context(
                 event.input_text, 
                 screenshot_path,
-                force_analysis=enter_pressed
+                force_analysis=should_force_analysis
             )
             
             # If analysis returns None, input is incomplete - keep buffer and wait
             if analysis_result is None:
                 logger.debug(f"Input incomplete, keeping buffer: '{input_text[:50]}...'")
+                # Log debug entry - incomplete input
+                self.log_debug_entry(input_text, "incomplete")
                 return  # Don't clear buffer, let input continue accumulating
             
             event.analysis_result = analysis_result
@@ -492,11 +546,23 @@ class MonitoringAgent(weave.Model):
             )
             object.__setattr__(self, 'statistics', new_stats)
             
+            # Log debug entry - complete processing
+            self.log_debug_entry(
+                input_text,
+                "complete",
+                category=analysis_result.category,
+                action=judgment_result.action.value,
+                confidence=analysis_result.confidence
+            )
+            
             logger.info(f"Processed input event: {analysis_result.category} -> {judgment_result.action.value} ({event.processing_time:.2f}s)")
             
         except Exception as e:
             logger.error(f"Error processing input event: {e}")
             event.error = str(e)
+            
+            # Log debug entry - error
+            self.log_debug_entry(input_text, "error", error=str(e))
             
             # Always clear input buffer on error to prevent loops
             try:
