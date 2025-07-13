@@ -70,8 +70,8 @@ class SpeechBubbleView(NSView):
         bubble_path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(bubble_rect, 15, 15)
         bubble_path.fill()
         
-        # Draw border
-        border_color = NSColor.colorWithRed_green_blue_alpha_(0.8, 0.8, 0.8, 1.0)
+        # Draw border (gray)
+        border_color = NSColor.grayColor()
         border_color.set()
         bubble_path.setLineWidth_(2)
         bubble_path.stroke()
@@ -103,11 +103,11 @@ class LockScreenView(NSView):
         center_x = screen_frame.size.width / 2
         center_y = screen_frame.size.height / 2
         
-        # 左上の吹き出しを作成
+        # ロボットの左側に吹き出しを配置
         bubble_width = 500
         bubble_height = 300
-        bubble_x = 100  # 左マージン
-        bubble_y = screen_frame.size.height - bubble_height - 100  # 上マージン
+        bubble_x = 200  # ロボットの左側
+        bubble_y = center_y - bubble_height / 2  # 画面中央の高さ
         
         initial_message = f"🔒 System Locked!\n\nReason: {self.reason}\n\nWaiting for parental approval...\nA notification has been sent to your parent."
         self.speech_bubble = SpeechBubbleView.alloc().initWithFrame_message_(
