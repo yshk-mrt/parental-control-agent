@@ -44,12 +44,11 @@ class SpeechBubbleView(NSView):
     
     def setup_ui(self):
         """Setup UI components for speech bubble"""
-        # Create message text field
+        # Create message text field with attributed string for different font sizes
         self.message_label = NSTextField.alloc().initWithFrame_(
             NSMakeRect(20, 20, self.frame().size.width - 40, self.frame().size.height - 40)
         )
-        self.message_label.setStringValue_(self.message)
-        self.message_label.setFont_(NSFont.boldSystemFontOfSize_(24))  # 大きな文字
+        self.update_message_with_formatting(self.message)
         self.message_label.setTextColor_(NSColor.blackColor())
         self.message_label.setBackgroundColor_(NSColor.clearColor())
         self.message_label.setBezeled_(False)
@@ -58,6 +57,13 @@ class SpeechBubbleView(NSView):
         self.message_label.setAlignment_(NSTextAlignmentLeft)
         self.message_label.cell().setWraps_(True)
         self.addSubview_(self.message_label)
+    
+    def update_message_with_formatting(self, message):
+        """Update message with different font sizes and styles"""
+        # シンプルに大きなフォントで表示
+        font = NSFont.boldSystemFontOfSize_(20)
+        self.message_label.setFont_(font)
+        self.message_label.setStringValue_(message)
     
     def drawRect_(self, rect):
         """Draw the speech bubble background"""
@@ -80,7 +86,7 @@ class SpeechBubbleView(NSView):
         """Update the message in the speech bubble"""
         self.message = message
         if self.message_label:
-            self.message_label.setStringValue_(message)
+            self.update_message_with_formatting(message)
 
 class LockScreenView(NSView):
     """ロックスクリーンのカスタムビュー"""
@@ -109,7 +115,7 @@ class LockScreenView(NSView):
         bubble_x = 200  # ロボットの左側
         bubble_y = center_y - bubble_height / 2  # 画面中央の高さ
         
-        initial_message = f"🔒 System Locked!\n\nReason: {self.reason}\n\nWaiting for parental approval...\nA notification has been sent to your parent."
+        initial_message = f"Hi there! 🛡️\n\nI need to pause here for a moment.\n\nReason: {self.reason}\n\nDon't worry! I've sent a message to your parent.\nThey'll help us continue safely! 😊"
         self.speech_bubble = SpeechBubbleView.alloc().initWithFrame_message_(
             NSMakeRect(bubble_x, bubble_y, bubble_width, bubble_height),
             initial_message
@@ -199,9 +205,9 @@ class LockScreenView(NSView):
         if remaining_time > 0:
             minutes = int(remaining_time // 60)
             seconds = int(remaining_time % 60)
-            bubble_text = f"🔒 System Locked!\n\nReason: {self.reason}\n\nWaiting for parental approval...\nTime remaining: {minutes:02d}:{seconds:02d}\n\nA notification has been sent to your parent."
+            bubble_text = f"Hi there! 🛡️\n\nI need to pause here for a moment.\n\nReason: {self.reason}\n\nTime remaining: {minutes:02d}:{seconds:02d}\n\nDon't worry! I've sent a message to your parent.\nThey'll help us continue safely! 😊"
         else:
-            bubble_text = f"🔒 System Locked!\n\nReason: {self.reason}\n\nRequest timed out.\nPlease try again later."
+            bubble_text = f"Oops! ⏰\n\nReason: {self.reason}\n\nLooks like we need to try again.\nPlease ask your parent for help! 🤗"
         
         if self.speech_bubble:
             self.speech_bubble.update_message(bubble_text)
