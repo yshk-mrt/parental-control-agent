@@ -47,6 +47,9 @@ structlog>=23.0.0
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
 
+# MCP Server Support
+mcp>=1.0.0
+
 # Development tools
 black>=23.0.0
 flake8>=6.0.0

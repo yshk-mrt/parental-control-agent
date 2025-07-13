@@ -9,3 +9,4 @@ monitoring_agent.log
 src/.frontend.pid
 src/.monitoring.pid
 src/.websocket.pid
+__pycache__/
