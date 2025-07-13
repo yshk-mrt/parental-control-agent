@@ -79,7 +79,7 @@ class GeminiMultimodalAnalyzer:
             raise ValueError("GOOGLE_API_KEY environment variable not set")
         
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
         
         # Analysis history for context
         self.analysis_history = []
@@ -216,6 +216,14 @@ IMPORTANT: Return ONLY the JSON object, no additional text.
                 context_summary="Technical error occurred",
                 detected_elements=["error"]
             )
+    
+    async def analyze_with_prompt(self, custom_prompt: str) -> str:
+        """Analyze content with a custom prompt and return raw response"""
+        try:
+            response = await self.model.generate_content_async(custom_prompt)
+            return response.text
+        except Exception as e:
+            raise Exception(f"Gemini analysis failed: {str(e)}")
     
     def analyze_text_only(self, text: str) -> ContentAnalysisResult:
         """Analyze text-only content"""
@@ -365,6 +373,17 @@ def analyze_text_content_tool(tool_context: ToolContext) -> Dict[str, Any]:
         # Analyze text
         result = analyzer.analyze_text_only(text_input)
         
+        # Helper function to determine parental action
+        def determine_parental_action(category):
+            if category in [ContentCategory.SAFE, ContentCategory.EDUCATIONAL]:
+                return "allow"
+            elif category in [ContentCategory.ENTERTAINMENT, ContentCategory.SOCIAL]:
+                return "monitor"
+            elif category == ContentCategory.CONCERNING:
+                return "restrict"
+            else:  # INAPPROPRIATE, DANGEROUS
+                return "block"
+        
         # Update tool context state
         tool_context.state["last_text_analysis"] = {
             "timestamp": result.timestamp,
@@ -385,7 +404,7 @@ def analyze_text_content_tool(tool_context: ToolContext) -> Dict[str, Any]:
                 "context_summary": result.context_summary,
                 "detected_elements": result.detected_elements
             },
-            "parental_action": "allow" if result.category in [ContentCategory.SAFE, ContentCategory.EDUCATIONAL] else "monitor",
+            "parental_action": determine_parental_action(result.category),
             "input_analyzed": text_input[:100] + "..." if len(text_input) > 100 else text_input
         }
         
@@ -587,7 +606,7 @@ def create_gemini_analysis_agent() -> Agent:
     
     return Agent(
         name="GeminiAnalysisAgent",
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         description="A multimodal AI agent that analyzes text and images for parental control and child safety assessment",
         instruction="""
         You are a specialized AI agent for parental control and child safety assessment using Google's Gemini multimodal capabilities.

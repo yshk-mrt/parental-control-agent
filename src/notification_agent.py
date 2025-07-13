@@ -133,7 +133,7 @@ class NotificationAgent(weave.Model):
         # Initialize Weave tracking
         try:
             weave.init("parental-control-notifications")
-            logger.info("Weave tracking initialized for notifications")
+            #logger.info("Weave tracking initialized for notifications")
         except Exception as e:
             logger.warning(f"Weave initialization failed: {e}")
     
@@ -379,9 +379,13 @@ class NotificationAgent(weave.Model):
         """Send desktop notification"""
         try:
             if platform.system() == "Darwin":  # macOS
+                # Escape strings for AppleScript
+                escaped_body = body.replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+                escaped_subject = subject.replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+                
                 # Use osascript for macOS notifications
                 script = f'''
-                display notification "{body}" with title "{subject}" sound name "Glass"
+                display notification "{escaped_body}" with title "{escaped_subject}" sound name "Glass"
                 '''
                 subprocess.run(["osascript", "-e", script], check=True)
                 
@@ -489,8 +493,11 @@ class NotificationAgent(weave.Model):
         try:
             # Send desktop notification to child
             if platform.system() == "Darwin":  # macOS
+                # Escape strings for AppleScript
+                escaped_message = message.replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+                
                 script = f'''
-                display notification "{message}" with title "Digital Safety Reminder" sound name "Ping"
+                display notification "{escaped_message}" with title "Digital Safety Reminder" sound name "Ping"
                 '''
                 subprocess.run(["osascript", "-e", script], check=True)
             

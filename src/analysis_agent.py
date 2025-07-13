@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # Initialize Weave for tracking
 try:
     weave.init("parental-control-agent")
-    logger.info("Weave initialized successfully")
+    #logger.info("Weave initialized successfully")
 except Exception as e:
     logger.warning(f"Weave initialization failed: {e}. Continuing without Weave tracking.")
 
@@ -158,6 +158,8 @@ class AnalysisAgent(weave.Model):
         # Initialize cache
         if self.cache_enabled:
             object.__setattr__(self, 'cache', AnalysisCache())
+        else:
+            object.__setattr__(self, 'cache', None)
         
         # Initialize tools
         object.__setattr__(self, 'gemini_tool', GeminiMultimodalAnalyzer())
@@ -178,6 +180,85 @@ class AnalysisAgent(weave.Model):
         """Main prediction method for Weave Model compatibility"""
         return await self.analyze_input_context(input_text, screenshot_path)
     
+    async def _check_input_completeness(self, input_text: str) -> Dict[str, Any]:
+        """Use LLM to check if input appears to be complete or incomplete"""
+        # Handle empty or whitespace-only inputs
+        if not input_text or not input_text.strip():
+            return {"is_complete": False, "confidence": 0.9, "reason": "Empty or whitespace-only input"}
+            
+        # Handle very short inputs
+        if len(input_text.strip()) < 2:
+            return {"is_complete": False, "confidence": 0.8, "reason": "Too short"}
+        
+        # Use Gemini to assess input completeness
+        try:
+            
+            # Create a specialized prompt for completeness checking
+            from gemini_multimodal import GeminiMultimodalAnalyzer
+            analyzer = GeminiMultimodalAnalyzer()
+            
+            # Check completeness using LLM
+            prompt = f"""Analyze the following text input and determine if it appears to be complete or incomplete:
+
+Input: "{input_text}"
+
+Consider:
+- Does it seem like the user finished typing their thought?
+- Does it end mid-word or mid-sentence?
+- Is it a complete phrase, question, or statement?
+- Does it have enough context to be meaningful?
+
+Examples:
+- "Hi" - complete greeting
+- "Hi from" - incomplete, seems cut off
+- "Hi from afr" - incomplete, cut off mid-word
+- "Hi from africa" - complete phrase
+- "Hello world" - complete phrase
+- "What is" - incomplete question
+- "What is 2+2?" - complete question
+
+Respond with JSON format:
+{{
+    "is_complete": true/false,
+    "confidence": 0.0-1.0,
+    "reason": "brief explanation"
+}}"""
+            
+            response = await analyzer.analyze_with_prompt(prompt)
+            
+            # Parse the response
+            import json
+            try:
+                # Clean the response
+                response_clean = response.strip()
+                
+                # Remove markdown code blocks if present
+                if response_clean.startswith('```json'):
+                    response_clean = response_clean[7:]
+                elif response_clean.startswith('```'):
+                    response_clean = response_clean[3:]
+                
+                if response_clean.endswith('```'):
+                    response_clean = response_clean[:-3]
+                
+                response_clean = response_clean.strip()
+                
+                result = json.loads(response_clean)
+                return {
+                    "is_complete": result.get("is_complete", True),
+                    "confidence": result.get("confidence", 0.5),
+                    "reason": result.get("reason", "LLM analysis")
+                }
+            except Exception as e:
+                logger.warning(f"JSON parsing failed: {e}, response: {response[:200]}...")
+                # Fallback to simple heuristics if JSON parsing fails
+                return {"is_complete": True, "confidence": 0.5, "reason": "Fallback analysis"}
+                
+        except Exception as e:
+            logger.warning(f"LLM completeness check failed: {e}")
+            # Fallback to simple heuristics
+            return {"is_complete": True, "confidence": 0.5, "reason": "Error fallback"}
+    
     @weave.op()
     async def analyze_input_context(self, 
                                   input_text: str, 
@@ -194,8 +275,38 @@ class AnalysisAgent(weave.Model):
         """
         start_time = time.time()
         
+        # Check for incomplete input using LLM
+        completeness_check = await self._check_input_completeness(input_text)
+        if not completeness_check["is_complete"]:
+            logger.info(f"LLM detected incomplete input: '{input_text}' - {completeness_check['reason']}")
+            
+            # For incomplete input, return a safe default result without full AI analysis
+            return AnalysisResult(
+                timestamp=datetime.now(),
+                input_text=input_text,
+                screenshot_path=screenshot_path,
+                category="safe",
+                confidence=max(0.5, 1.0 - completeness_check["confidence"]),  # Lower confidence for incomplete input
+                age_appropriateness={
+                    "elementary": True,
+                    "middle_school": True,
+                    "high_school": True
+                },
+                safety_concerns=[],
+                educational_value="neutral",
+                parental_action="monitor",  # Monitor rather than allow/restrict
+                context_summary=f"Incomplete input detected: '{input_text}'. {completeness_check['reason']}",
+                application_detected="unknown",
+                detailed_analysis={
+                    "incomplete_input": True,
+                    "llm_completeness_check": completeness_check,
+                    "original_text": input_text,
+                    "processing_time": time.time() - start_time
+                }
+            )
+        
         # Check cache first
-        if self.cache_enabled:
+        if self.cache_enabled and self.cache:
             cached_result = self.cache.get(input_text, screenshot_path)
             if cached_result:
                 self.stats['cache_hits'] += 1
@@ -242,7 +353,7 @@ class AnalysisAgent(weave.Model):
             )
             
             # Cache result
-            if self.cache_enabled:
+            if self.cache_enabled and self.cache:
                 self.cache.set(input_text, screenshot_path, result)
             
             # Update statistics
@@ -280,19 +391,37 @@ class AnalysisAgent(weave.Model):
         """Analyze content using multimodal AI (text + image)"""
         try:
             class MockToolContext:
-                def __init__(self, input_text, screenshot_path):
+                def __init__(self, input_text, screenshot_path, age_group, strictness_level):
                     self.state = {
                         'current_input_text': input_text,
                         'current_screenshot_base64': '',  # Would need to load actual image
-                        'screenshot_mime_type': 'image/jpeg'
+                        'screenshot_mime_type': 'image/jpeg',
+                        'target_age_group': age_group,
+                        'strict_mode': strictness_level == 'strict'
                     }
                     
                 def get_session(self):
                     return None
             
-            context = MockToolContext(input_text, screenshot_path)
+            context = MockToolContext(input_text, screenshot_path, self.age_group, self.strictness_level)
             result = analyze_multimodal_content_tool(context)
-            return result
+            
+            # Extract analysis data from the result
+            if result.get('status') == 'success':
+                analysis = result.get('analysis', {})
+                return {
+                    'category': analysis.get('category', 'unknown'),
+                    'confidence': analysis.get('confidence', 0.0),
+                    'age_appropriateness': analysis.get('age_appropriate', {}),
+                    'safety_concerns': analysis.get('concerns', []),
+                    'educational_value': analysis.get('educational_value', 'Unknown'),
+                    'parental_action': result.get('parental_action', 'monitor'),
+                    'context_summary': analysis.get('context_summary', 'Analysis completed'),
+                    'detailed_analysis': analysis
+                }
+            else:
+                logger.error(f"Multimodal analysis failed: {result.get('message', 'Unknown error')}")
+                return await self._analyze_text_content(input_text)
         except Exception as e:
             logger.error(f"Multimodal analysis error: {e}")
             return await self._analyze_text_content(input_text)
@@ -302,17 +431,44 @@ class AnalysisAgent(weave.Model):
         """Analyze content using text-only AI"""
         try:
             class MockToolContext:
-                def __init__(self, input_text):
+                def __init__(self, input_text, age_group, strictness_level):
                     self.state = {
-                        'current_input_text': input_text
+                        'current_input_text': input_text,
+                        'target_age_group': age_group,
+                        'strict_mode': strictness_level == 'strict'
                     }
                     
                 def get_session(self):
                     return None
             
-            context = MockToolContext(input_text)
+            context = MockToolContext(input_text, self.age_group, self.strictness_level)
             result = analyze_text_content_tool(context)
-            return result
+            
+            # Extract analysis data from the result
+            if result.get('status') == 'success':
+                analysis = result.get('analysis', {})
+                return {
+                    'category': analysis.get('category', 'unknown'),
+                    'confidence': analysis.get('confidence', 0.0),
+                    'age_appropriateness': analysis.get('age_appropriate', {}),
+                    'safety_concerns': analysis.get('concerns', []),
+                    'educational_value': analysis.get('educational_value', 'Unknown'),
+                    'parental_action': result.get('parental_action', 'monitor'),
+                    'context_summary': analysis.get('context_summary', 'Analysis completed'),
+                    'detailed_analysis': analysis
+                }
+            else:
+                logger.error(f"Text analysis failed: {result.get('message', 'Unknown error')}")
+                return {
+                    'category': 'unknown',
+                    'confidence': 0.0,
+                    'age_appropriateness': {},
+                    'safety_concerns': ['Analysis failed'],
+                    'educational_value': 'Unknown',
+                    'parental_action': 'monitor',
+                    'context_summary': f'Analysis failed: {result.get("message", "Unknown error")}',
+                    'detailed_analysis': {'error': result.get('message', 'Unknown error')}
+                }
         except Exception as e:
             logger.error(f"Text analysis error: {e}")
             return {
@@ -373,9 +529,11 @@ class AnalysisAgent(weave.Model):
     @weave.op()
     def cleanup_cache(self):
         """Clean up old cache files"""
-        if self.cache_enabled:
+        if self.cache_enabled and self.cache:
             self.cache.cleanup_old_cache()
             logger.info("Cache cleanup completed")
+        else:
+            logger.info("Cache is disabled, no cleanup needed")
 
 # ADK FunctionTool implementations
 
@@ -467,7 +625,7 @@ def create_analysis_agent() -> Agent:
     
     return Agent(
         name="AnalysisAgent",
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         description="A comprehensive analysis agent that coordinates content analysis using multimodal AI for parental control assessment",
         instruction="""
         You are a specialized AI agent for parental control content analysis and child safety assessment.

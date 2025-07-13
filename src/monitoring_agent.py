@@ -80,7 +80,7 @@ logger = logging.getLogger(__name__)
 # Initialize Weave for tracking
 try:
     weave.init("parental-control-monitoring")
-    logger.info("Weave initialized for Monitoring Agent")
+    #logger.info("Weave initialized for Monitoring Agent")
 except Exception as e:
     logger.warning(f"Weave initialization failed: {e}. Continuing without Weave tracking.")
 
@@ -238,9 +238,9 @@ class MonitoringAgent(weave.Model):
                     self.state = {}
             
             context = MockToolContext()
-            keylogger_result = start_keylogger_tool(context)
+            keylogger_result = start_keylogger_tool.func(context)
             
-            if not keylogger_result.get('success', False):
+            if keylogger_result.get('status') != 'success':
                 object.__setattr__(self, 'status', MonitoringStatus.ERROR)
                 return {
                     "status": "error",
@@ -309,10 +309,10 @@ class MonitoringAgent(weave.Model):
                     self.state = {}
             
             context = MockToolContext()
-            stop_keylogger_tool(context)
+            stop_keylogger_tool.func(context)
             
             # Clean up temporary files
-            cleanup_temp_files_tool(context)
+            cleanup_temp_files_tool.func(context)
             
             # End session in session manager
             if self.session_id:
@@ -358,7 +358,7 @@ class MonitoringAgent(weave.Model):
             try:
                 # Check for input completion
                 context = type('MockToolContext', (), {'state': {}})()
-                input_status = get_current_input_tool(context)
+                input_status = get_current_input_tool.func(context)
                 
                 if input_status.get('input_complete', False):
                     # Process the completed input
@@ -382,10 +382,27 @@ class MonitoringAgent(weave.Model):
     async def _process_input_event(self, input_status: Dict[str, Any]):
         """Process a completed input event through the full workflow"""
         start_time = time.time()
+        
+        # Extract text from buffer structure
+        input_text = ""
+        if input_status.get('buffer') and isinstance(input_status['buffer'], dict):
+            input_text = input_status['buffer'].get('text', '')
+        
+        # Skip processing if input is only whitespace/newlines
+        if not input_text or not input_text.strip():
+            logger.debug("Skipping empty or whitespace-only input")
+            # Clear input buffer to prevent loops
+            try:
+                context = type('MockToolContext', (), {'state': {}})()
+                clear_input_buffer_tool.func(context)
+            except Exception as e:
+                logger.error(f"Error clearing input buffer: {e}")
+            return
+        
         event = MonitoringEvent(
             timestamp=datetime.now(),
             event_type="input_complete",
-            input_text=input_status.get('current_input', ''),
+            input_text=input_text,
             screenshot_path=None,
             analysis_result=None,
             judgment_result=None,
@@ -422,6 +439,7 @@ class MonitoringAgent(weave.Model):
             
             # Step 3: Apply judgment
             judgment_result = await self.judgment_engine.judge_content({
+                'input_text': event.input_text,
                 'category': analysis_result.category,
                 'confidence': analysis_result.confidence,
                 'age_appropriateness': analysis_result.age_appropriateness,
@@ -449,7 +467,7 @@ class MonitoringAgent(weave.Model):
             
             # Step 5: Clear input buffer
             context = type('MockToolContext', (), {'state': {}})()
-            clear_input_buffer_tool(context)
+            clear_input_buffer_tool.func(context)
             
             # Calculate processing time
             event.processing_time = time.time() - start_time
@@ -469,6 +487,13 @@ class MonitoringAgent(weave.Model):
         except Exception as e:
             logger.error(f"Error processing input event: {e}")
             event.error = str(e)
+            
+            # Always clear input buffer on error to prevent loops
+            try:
+                context = type('MockToolContext', (), {'state': {}})()
+                clear_input_buffer_tool.func(context)
+            except Exception as clear_error:
+                logger.error(f"Error clearing input buffer after error: {clear_error}")
             
             # Update error statistics
             new_stats = dict(self.statistics)
@@ -669,6 +694,7 @@ class MonitoringAgent(weave.Model):
             
             # Step 2: Apply judgment
             judgment_result = await self.judgment_engine.judge_content({
+                'input_text': input_text,
                 'category': analysis_result.category,
                 'confidence': analysis_result.confidence,
                 'age_appropriateness': analysis_result.age_appropriateness,
@@ -779,7 +805,7 @@ def create_monitoring_agent() -> Agent:
     
     return Agent(
         name="MonitoringAgent",
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         description="A comprehensive monitoring agent that orchestrates all parental control components",
         instruction="""
         You are the main orchestrating agent for a comprehensive parental control system.

@@ -25,7 +25,7 @@ class InputBuffer:
     start_time: Optional[datetime] = None
     last_activity: Optional[datetime] = None
     enter_pressed: bool = False
-    substantial_input_threshold: int = 10  # Minimum characters for substantial input
+    substantial_input_threshold: int = 15  # Minimum characters for substantial input
     
     def add_char(self, char: str) -> None:
         """Add character to buffer"""
@@ -48,9 +48,28 @@ class InputBuffer:
         """Check if input is substantial enough"""
         return len(self.text.strip()) >= self.substantial_input_threshold
     
+    def is_at_word_boundary(self) -> bool:
+        """Check if current text ends at a word boundary (space or punctuation)"""
+        if not self.text:
+            return False
+        
+        last_char = self.text[-1]
+        return last_char in ' \t\n.,!?;:'
+    
     def is_input_complete(self) -> bool:
-        """Determine if input is complete based on Enter press or substantial input"""
-        return self.enter_pressed or self.is_substantial_input()
+        """Determine if input is complete based on Enter press or substantial input at word boundary"""
+        # Don't consider input complete if it's only whitespace/newlines
+        if not self.text.strip():
+            return False
+            
+        if self.enter_pressed:
+            return True
+        
+        # Only consider substantial input complete if it ends at a word boundary
+        if self.is_substantial_input():
+            return self.is_at_word_boundary()
+        
+        return False
     
     def clear(self) -> None:
         """Clear the buffer"""

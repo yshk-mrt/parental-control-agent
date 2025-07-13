@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Initialize Weave for tracking
 try:
     weave.init("parental-control-agent")
-    logger.info("Weave initialized for Judgment Engine")
+    #logger.info("Weave initialized for Judgment Engine")
 except Exception as e:
     logger.warning(f"Weave initialization failed: {e}. Continuing without Weave tracking.")
 
@@ -93,7 +93,9 @@ class JudgmentConfig:
     age_group: AgeGroup = AgeGroup.ELEMENTARY
     strictness_level: StrictnessLevel = StrictnessLevel.MODERATE
     emergency_keywords: List[str] = field(default_factory=lambda: [
-        "suicide", "self-harm", "violence", "abuse", "drugs", "weapons"
+        "suicide", "self-harm", "violence", "abuse", "drugs", "weapons",
+        "bomb", "explosive", "kill", "hurt", "damage", "destroy", "attack",
+        "weapon", "gun", "knife", "poison", "dangerous", "harmful"
     ])
     time_based_rules: bool = True
     learning_mode: bool = False
@@ -116,12 +118,20 @@ class JudgmentEngine(weave.Model):
     judgment_history: List[JudgmentResult] = field(default_factory=list)
     stats: Optional[Dict[str, Any]] = None
     
-    def __init__(self, config: Optional[JudgmentConfig] = None, **kwargs):
+    def __init__(self, config: Optional[JudgmentConfig] = None, age_group: Optional[str] = None, strictness_level: Optional[str] = None, **kwargs):
         super().__init__(**kwargs)
         
         # Initialize configuration
         if config:
             object.__setattr__(self, 'config', config)
+        elif age_group or strictness_level:
+            # Create config from individual parameters
+            age_group_enum = AgeGroup(age_group) if age_group else AgeGroup.ELEMENTARY
+            strictness_enum = StrictnessLevel(strictness_level) if strictness_level else StrictnessLevel.MODERATE
+            object.__setattr__(self, 'config', JudgmentConfig(
+                age_group=age_group_enum,
+                strictness_level=strictness_enum
+            ))
         else:
             object.__setattr__(self, 'config', JudgmentConfig())
         
@@ -230,11 +240,11 @@ class JudgmentEngine(weave.Model):
             JudgmentRule(
                 rule_id="CONC-001",
                 name="Concerning Content",
-                description="Restrict concerning content",
+                description="Block concerning content",
                 conditions={
                     "category": "concerning"
                 },
-                action=JudgmentAction.RESTRICT,
+                action=JudgmentAction.BLOCK,
                 priority=15
             ),
             
@@ -840,7 +850,7 @@ def create_judgment_agent() -> Agent:
     
     return Agent(
         name="JudgmentAgent",
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         description="A judgment agent that processes content analysis and determines appropriate parental actions",
         instruction="""
         You are a specialized AI agent for parental control judgment and decision-making.
