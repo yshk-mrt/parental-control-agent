@@ -98,8 +98,8 @@ const LearningDashboard: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-primary">User's Learning Dashboard</h1>
-          <p className="text-muted-foreground">Track your child's curiosity and growth journey.</p>
+          <h1 className="text-2xl font-bold text-blue-600">User's Learning Dashboard</h1>
+          <p className="text-gray-600">Track your child's curiosity and growth journey.</p>
         </div>
         <div className="flex gap-2">
           <Button 
@@ -134,20 +134,20 @@ const LearningDashboard: React.FC = () => {
       </div>
 
       {/* Safety & Security Report */}
-      <Card className="border-l-4 border-l-destructive">
+      <Card className="border-l-4 border-l-red-500">
         <CardHeader>
           <div className="flex items-center space-x-2">
-            <Icon icon={AlertTriangle} className="w-5 h-5 text-destructive" />
+            <Icon icon={AlertTriangle} className="w-5 h-5 text-red-500" />
             <h2 className="text-lg font-semibold">Safety & Security Report</h2>
           </div>
         </CardHeader>
         <CardContent>
-          <div className="bg-destructive/10 rounded-lg p-4 mb-4">
+          <div className="bg-red-50 rounded-lg p-4 mb-4">
             <div className="flex items-start space-x-3">
-              <Icon icon={Shield} className="w-5 h-5 text-destructive mt-1" />
+              <Icon icon={Shield} className="w-5 h-5 text-red-500 mt-1" />
               <div className="flex-1">
-                <h3 className="font-semibold text-destructive mb-1">Attention Required!</h3>
-                <p className="text-sm text-muted-foreground mb-3">
+                <h3 className="font-semibold text-red-500 mb-1">Attention Required!</h3>
+                <p className="text-sm text-gray-600 mb-3">
                   {safetyAlert.message}
                 </p>
                 {safetyAlert.hasApprovalPending && (
@@ -169,9 +169,9 @@ const LearningDashboard: React.FC = () => {
           <Card className="lg:col-span-2 card-hover">
             <CardHeader>
               <div className="flex items-center space-x-2">
-                <Icon icon={Compass} className="w-5 h-5 text-primary" />
+                <Icon icon={Compass} className="w-5 h-5 text-blue-600" />
                 <h2 className="text-lg font-semibold">Interest Compass</h2>
-                <Icon icon={Lightbulb} className="w-4 h-4 text-accent" />
+                <Icon icon={Lightbulb} className="w-4 h-4 text-yellow-500" />
               </div>
             </CardHeader>
             <CardContent>
@@ -219,7 +219,7 @@ const LearningDashboard: React.FC = () => {
           <Card className="card-hover">
             <CardHeader>
               <div className="flex items-center space-x-2">
-                <Icon icon={MessageCircle} className="w-5 h-5 text-secondary" />
+                <Icon icon={MessageCircle} className="w-5 h-5 text-teal-600" />
                 <h2 className="text-lg font-semibold">Communication Supporter</h2>
               </div>
             </CardHeader>

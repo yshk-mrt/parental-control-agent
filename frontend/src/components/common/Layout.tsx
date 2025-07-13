@@ -1,5 +1,7 @@
 import React from 'react';
-import { cn } from '../../utils/cn';
+
+// 一時的なcn関数
+const cn = (...classes: (string | undefined)[]) => classes.filter(Boolean).join(' ');
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -8,7 +10,7 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children, className }) => {
   return (
-    <div className={cn('min-h-screen bg-background text-foreground', className)}>
+    <div className={cn('min-h-screen bg-gray-50 text-gray-900', className)}>
       {children}
     </div>
   );
@@ -29,8 +31,8 @@ const Container: React.FC<ContainerProps> = ({
     sm: 'max-w-sm',
     md: 'max-w-md',
     lg: 'max-w-lg',
-    xl: 'max-w-xl',
-    '2xl': 'max-w-2xl',
+    xl: 'max-w-4xl',
+    '2xl': 'max-w-6xl',
     full: 'max-w-full',
   };
 

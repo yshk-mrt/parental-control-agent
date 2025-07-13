@@ -1,5 +1,7 @@
 import React from 'react';
-import { cn } from '../../utils/cn';
+
+// 一時的なcn関数
+const cn = (...classes: (string | undefined)[]) => classes.filter(Boolean).join(' ');
 
 interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
@@ -9,7 +11,7 @@ const Card: React.FC<CardProps> = ({ className, children, ...props }) => {
   return (
     <div
       className={cn(
-        'rounded-lg border bg-card text-card-foreground shadow-md',
+        'rounded-lg border border-gray-200 bg-white text-gray-900 shadow-md',
         className
       )}
       {...props}

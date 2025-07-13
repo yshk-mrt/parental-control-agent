@@ -13,7 +13,7 @@ import { Monitor, BookOpen, Settings } from 'lucide-react';
 
 const AppContent: React.FC = () => {
   const { state, connect, disconnect, sendApprovalResponse } = useParentDashboard();
-  const [currentView, setCurrentView] = useState<'dashboard' | 'learning' | 'settings'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'learning' | 'settings'>('learning');
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
 
   useEffect(() => {
@@ -59,7 +59,7 @@ const AppContent: React.FC = () => {
   return (
     <Layout>
       <Container maxWidth="2xl" className="py-8">
-        <div className="flex justify-between items-center mb-8">
+        <div className="flex justify-between items-center mb-8 bg-white p-4 rounded-lg shadow-sm border">
           <PageHeader 
             title="Safe Browser AI - Parent Dashboard" 
             description="Manage your child's safe internet experience"
@@ -68,7 +68,7 @@ const AppContent: React.FC = () => {
         </div>
 
         {/* Navigation */}
-        <div className="flex space-x-1 mb-8 bg-muted/30 p-1 rounded-lg">
+        <div className="flex space-x-1 mb-8 bg-gray-100 p-1 rounded-lg">
           {navigationItems.map((item) => (
             <Button
               key={item.id}

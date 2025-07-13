@@ -1,5 +1,7 @@
 import React from 'react';
-import { cn } from '../../utils/cn';
+
+// 一時的なcn関数
+const cn = (...classes: (string | undefined)[]) => classes.filter(Boolean).join(' ');
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'destructive' | 'success' | 'outline' | 'ghost';
@@ -17,12 +19,12 @@ const Button: React.FC<ButtonProps> = ({
   const baseStyles = 'inline-flex items-center justify-center rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none';
   
   const variants = {
-    primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
-    secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/90',
-    destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
-    success: 'bg-success text-success-foreground hover:bg-success/90',
-    outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
-    ghost: 'hover:bg-accent hover:text-accent-foreground',
+    primary: 'bg-blue-600 text-white hover:bg-blue-700',
+    secondary: 'bg-teal-600 text-white hover:bg-teal-700',
+    destructive: 'bg-red-600 text-white hover:bg-red-700',
+    success: 'bg-green-600 text-white hover:bg-green-700',
+    outline: 'border border-gray-300 bg-white hover:bg-gray-50 text-gray-900',
+    ghost: 'hover:bg-gray-100 text-gray-900',
   };
 
   const sizes = {

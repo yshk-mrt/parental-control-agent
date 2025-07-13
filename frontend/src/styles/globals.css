@@ -106,10 +106,17 @@
 }
 
 body {
+  margin: 0;
+  padding: 0;
   letter-spacing: var(--tracking-normal);
   font-family: var(--font-sans);
   background-color: var(--background);
   color: var(--foreground);
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 @layer utilities {

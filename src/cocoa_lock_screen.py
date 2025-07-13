@@ -18,8 +18,10 @@ try:
     from Cocoa import (
         NSApplication, NSWindow, NSScreen, NSColor, NSView, NSTextField, NSFont,
         NSBackingStoreBuffered, NSWindowStyleMaskBorderless,
-        NSApplicationActivationPolicyRegular, NSTextAlignmentCenter,
-        NSApp, NSRunLoop, NSDefaultRunLoopMode, NSDate, NSTimer
+        NSApplicationActivationPolicyRegular, NSTextAlignmentCenter, NSTextAlignmentLeft,
+        NSApp, NSRunLoop, NSDefaultRunLoopMode, NSDate, NSTimer, NSImageView, NSImage,
+        NSViewWidthSizable, NSViewHeightSizable, NSImageScaleProportionallyUpOrDown,
+        NSBezierPath
     )
     from Quartz import CGShieldingWindowLevel
     from Foundation import NSMakeRect, NSObject
@@ -30,133 +32,179 @@ except ImportError:
     print("❌ Cocoa dependencies not available")
     sys.exit(1)
 
+class SpeechBubbleView(NSView):
+    """Speech bubble view for displaying messages"""
+    
+    def initWithFrame_message_(self, frame, message):
+        self = self.initWithFrame_(frame)
+        if self:
+            self.message = message
+            self.setup_ui()
+        return self
+    
+    def setup_ui(self):
+        """Setup UI components for speech bubble"""
+        # Create message text field
+        self.message_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(20, 20, self.frame().size.width - 40, self.frame().size.height - 40)
+        )
+        self.message_label.setStringValue_(self.message)
+        self.message_label.setFont_(NSFont.boldSystemFontOfSize_(24))  # 大きな文字
+        self.message_label.setTextColor_(NSColor.blackColor())
+        self.message_label.setBackgroundColor_(NSColor.clearColor())
+        self.message_label.setBezeled_(False)
+        self.message_label.setEditable_(False)
+        self.message_label.setSelectable_(False)
+        self.message_label.setAlignment_(NSTextAlignmentLeft)
+        self.message_label.cell().setWraps_(True)
+        self.addSubview_(self.message_label)
+    
+    def drawRect_(self, rect):
+        """Draw the speech bubble background"""
+        # Set bubble background color (solid white)
+        bubble_color = NSColor.whiteColor()
+        bubble_color.set()
+        
+        # Create rounded rectangle for speech bubble
+        bubble_rect = NSMakeRect(10, 10, rect.size.width - 20, rect.size.height - 20)
+        bubble_path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(bubble_rect, 15, 15)
+        bubble_path.fill()
+        
+        # Draw border
+        border_color = NSColor.colorWithRed_green_blue_alpha_(0.8, 0.8, 0.8, 1.0)
+        border_color.set()
+        bubble_path.setLineWidth_(2)
+        bubble_path.stroke()
+    
+    def update_message(self, message):
+        """Update the message in the speech bubble"""
+        self.message = message
+        if self.message_label:
+            self.message_label.setStringValue_(message)
+
 class LockScreenView(NSView):
-    """ロックスクリーン用のカスタムビュー"""
+    """ロックスクリーンのカスタムビュー"""
     
     def initWithFrame_reason_timeout_(self, frame, reason, timeout):
         self = self.initWithFrame_(frame)
         if self:
             self.reason = reason
             self.timeout = timeout
-            self.start_time = time.time()
             self.setup_ui()
         return self
     
     def setup_ui(self):
-        """UI要素を設定"""
-        # 背景色
-        self.setWantsLayer_(True)
-        self.layer().setBackgroundColor_(NSColor.colorWithRed_green_blue_alpha_(0.1, 0.1, 0.1, 0.95).CGColor())
+        """UIコンポーネントを設定"""
+        # 背景画像を設定
+        self.setup_background_image()
         
+        # 画面の中央に配置するためのフレーム計算
         screen_frame = self.frame()
+        center_x = screen_frame.size.width / 2
+        center_y = screen_frame.size.height / 2
         
-        # ロックアイコン
-        lock_icon = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 100, 100))
-        lock_icon.setStringValue_("🔒")
-        lock_icon.setFont_(NSFont.systemFontOfSize_(72))
-        lock_icon.setTextColor_(NSColor.colorWithRed_green_blue_alpha_(1.0, 0.27, 0.27, 1.0))
-        lock_icon.setBackgroundColor_(NSColor.clearColor())
-        lock_icon.setBordered_(False)
-        lock_icon.setEditable_(False)
-        lock_icon.setSelectable_(False)
-        lock_icon.setAlignment_(NSTextAlignmentCenter)
+        # 左上の吹き出しを作成
+        bubble_width = 500
+        bubble_height = 300
+        bubble_x = 100  # 左マージン
+        bubble_y = screen_frame.size.height - bubble_height - 100  # 上マージン
         
-        # アイコンの位置
-        lock_x = (screen_frame.size.width - 100) / 2
-        lock_y = screen_frame.size.height * 0.6
-        lock_icon.setFrame_(NSMakeRect(lock_x, lock_y, 100, 100))
-        self.addSubview_(lock_icon)
+        initial_message = f"🔒 System Locked!\n\nReason: {self.reason}\n\nWaiting for parental approval...\nA notification has been sent to your parent."
+        self.speech_bubble = SpeechBubbleView.alloc().initWithFrame_message_(
+            NSMakeRect(bubble_x, bubble_y, bubble_width, bubble_height),
+            initial_message
+        )
+        self.addSubview_(self.speech_bubble)
         
-        # タイトル
-        title = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 600, 40))
-        title.setStringValue_("システムがロックされました")
-        title.setFont_(NSFont.boldSystemFontOfSize_(24))
-        title.setTextColor_(NSColor.whiteColor())
-        title.setBackgroundColor_(NSColor.clearColor())
-        title.setBordered_(False)
-        title.setEditable_(False)
-        title.setSelectable_(False)
-        title.setAlignment_(NSTextAlignmentCenter)
+        # 中央のメッセージは削除し、すべて左上の吹き出しに集約
+    
+    def setup_background_image(self):
+        """背景画像を設定"""
+        # まず上下を黒色(透過なし)で埋める
+        self.setWantsLayer_(True)
+        if self.layer():
+            self.layer().setBackgroundColor_(NSColor.blackColor().CGColor())
         
-        title_x = (screen_frame.size.width - 600) / 2
-        title_y = lock_y - 60
-        title.setFrame_(NSMakeRect(title_x, title_y, 600, 40))
-        self.addSubview_(title)
+        # 背景画像のパスを取得
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        image_path = os.path.join(current_dir, "..", "assets", "lock_background.jpg")
         
-        # 理由
-        reason_text = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 800, 60))
-        reason_text.setStringValue_(self.reason)
-        reason_text.setFont_(NSFont.systemFontOfSize_(16))
-        reason_text.setTextColor_(NSColor.whiteColor())
-        reason_text.setBackgroundColor_(NSColor.clearColor())
-        reason_text.setBordered_(False)
-        reason_text.setEditable_(False)
-        reason_text.setSelectable_(False)
-        reason_text.setAlignment_(NSTextAlignmentCenter)
-        
-        reason_x = (screen_frame.size.width - 800) / 2
-        reason_y = title_y - 80
-        reason_text.setFrame_(NSMakeRect(reason_x, reason_y, 800, 60))
-        self.addSubview_(reason_text)
-        
-        # ステータス
-        self.status_text = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 600, 30))
-        self.status_text.setStringValue_("親の承認を待っています...")
-        self.status_text.setFont_(NSFont.systemFontOfSize_(16))
-        self.status_text.setTextColor_(NSColor.whiteColor())
-        self.status_text.setBackgroundColor_(NSColor.clearColor())
-        self.status_text.setBordered_(False)
-        self.status_text.setEditable_(False)
-        self.status_text.setSelectable_(False)
-        self.status_text.setAlignment_(NSTextAlignmentCenter)
-        
-        status_x = (screen_frame.size.width - 600) / 2
-        status_y = reason_y - 50
-        self.status_text.setFrame_(NSMakeRect(status_x, status_y, 600, 30))
-        self.addSubview_(self.status_text)
-        
-        # 指示
-        instructions = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 600, 40))
-        instructions.setStringValue_("親に通知が送信されました。\n承認をお待ちください。")
-        instructions.setFont_(NSFont.systemFontOfSize_(12))
-        instructions.setTextColor_(NSColor.whiteColor())
-        instructions.setBackgroundColor_(NSColor.clearColor())
-        instructions.setBordered_(False)
-        instructions.setEditable_(False)
-        instructions.setSelectable_(False)
-        instructions.setAlignment_(NSTextAlignmentCenter)
-        
-        instr_x = (screen_frame.size.width - 600) / 2
-        instr_y = status_y - 60
-        instructions.setFrame_(NSMakeRect(instr_x, instr_y, 600, 40))
-        self.addSubview_(instructions)
-        
-        # フッター
-        footer = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 600, 20))
-        footer.setStringValue_("Safe Browser AI - ペアレンタルコントロールシステム")
-        footer.setFont_(NSFont.systemFontOfSize_(12))
-        footer.setTextColor_(NSColor.whiteColor())
-        footer.setBackgroundColor_(NSColor.clearColor())
-        footer.setBordered_(False)
-        footer.setEditable_(False)
-        footer.setSelectable_(False)
-        footer.setAlignment_(NSTextAlignmentCenter)
-        
-        footer_x = (screen_frame.size.width - 600) / 2
-        footer_y = 40
-        footer.setFrame_(NSMakeRect(footer_x, footer_y, 600, 20))
-        self.addSubview_(footer)
+        if os.path.exists(image_path):
+            try:
+                # 画像を読み込み
+                image = NSImage.alloc().initWithContentsOfFile_(image_path)
+                if image:
+                    # 画像のサイズを取得
+                    image_size = image.size()
+                    screen_frame = self.frame()
+                    
+                    # 画像のアスペクト比を保持して中央に配置
+                    aspect_ratio = image_size.width / image_size.height
+                    screen_aspect_ratio = screen_frame.size.width / screen_frame.size.height
+                    
+                    if aspect_ratio > screen_aspect_ratio:
+                        # 画像の方が横長の場合、幅を画面に合わせる
+                        image_width = screen_frame.size.width
+                        image_height = image_width / aspect_ratio
+                    else:
+                        # 画像の方が縦長の場合、高さを画面に合わせる
+                        image_height = screen_frame.size.height
+                        image_width = image_height * aspect_ratio
+                    
+                    # 中央に配置
+                    image_x = (screen_frame.size.width - image_width) / 2
+                    image_y = (screen_frame.size.height - image_height) / 2
+                    
+                    # 背景画像ビューを作成
+                    background_view = NSImageView.alloc().initWithFrame_(
+                        NSMakeRect(image_x, image_y, image_width, image_height)
+                    )
+                    background_view.setImage_(image)
+                    background_view.setImageScaling_(NSImageScaleProportionallyUpOrDown)
+                    
+                    # 透過なし（元の設定）
+                    background_view.setAlphaValue_(1.0)
+                    
+                    # 背景として追加
+                    self.addSubview_(background_view)
+                    
+                    print(f"✅ 背景画像を設定しました: {image_path}")
+                else:
+                    print(f"⚠️ 画像の読み込みに失敗しました: {image_path}")
+                    self.setup_fallback_background()
+            except Exception as e:
+                print(f"❌ 背景画像設定エラー: {e}")
+                self.setup_fallback_background()
+        else:
+            print(f"⚠️ 背景画像が見つかりません: {image_path}")
+            print("📝 画像を以下のパスに保存してください:")
+            print(f"   {image_path}")
+            self.setup_fallback_background()
+    
+    def setup_fallback_background(self):
+        """フォールバック背景を設定"""
+        # グラデーション背景を作成
+        try:
+            # 単色の背景色を設定
+            self.setWantsLayer_(True)
+            if self.layer():
+                # 深い青色の背景
+                self.layer().setBackgroundColor_(NSColor.colorWithRed_green_blue_alpha_(0.1, 0.2, 0.4, 0.9).CGColor())
+                print("✅ フォールバック背景を設定しました")
+        except Exception as e:
+            print(f"⚠️ フォールバック背景設定エラー: {e}")
     
     def update_status(self, remaining_time):
         """ステータスを更新"""
         if remaining_time > 0:
             minutes = int(remaining_time // 60)
             seconds = int(remaining_time % 60)
-            status = f"親の承認を待っています... ({minutes:02d}:{seconds:02d})"
+            bubble_text = f"🔒 System Locked!\n\nReason: {self.reason}\n\nWaiting for parental approval...\nTime remaining: {minutes:02d}:{seconds:02d}\n\nA notification has been sent to your parent."
         else:
-            status = "リクエストがタイムアウトしました"
+            bubble_text = f"🔒 System Locked!\n\nReason: {self.reason}\n\nRequest timed out.\nPlease try again later."
         
-        self.status_text.setStringValue_(status)
+        if self.speech_bubble:
+            self.speech_bubble.update_message(bubble_text)
 
 class LockScreenApp:
     """ロックスクリーンアプリケーション"""
@@ -177,10 +225,31 @@ class LockScreenApp:
         
     def start_monitoring_thread(self):
         """シグナル監視スレッドを開始"""
+        # 起動時に古いシグナルファイルをクリーンアップ
+        self.cleanup_old_signal_files()
+        
         self.monitor_thread = threading.Thread(target=self._monitor_signals, daemon=True)
         self.monitor_thread.start()
         print("🔍 シグナル監視スレッドを開始しました")
+    
+    def cleanup_old_signal_files(self):
+        """古いシグナルファイルをクリーンアップ"""
+        signal_files = [
+            '/tmp/cocoa_lock_unlock',
+            '/tmp/unlock_signal',
+            '/tmp/cocoa_overlay_unlock'
+        ]
         
+        for signal_file in signal_files:
+            try:
+                if os.path.exists(signal_file):
+                    os.remove(signal_file)
+                    print(f"🧹 古いシグナルファイルを削除: {signal_file}")
+            except Exception as e:
+                print(f"⚠️ シグナルファイル削除エラー: {signal_file} - {e}")
+        
+        print("✅ シグナルファイルクリーンアップ完了")
+    
     def _monitor_signals(self):
         """シグナルファイルを監視"""
         signal_file = '/tmp/cocoa_lock_unlock'
@@ -347,7 +416,7 @@ class LockScreenApp:
 def main():
     """メイン関数"""
     parser = argparse.ArgumentParser(description='Cocoaロックスクリーン')
-    parser.add_argument('--reason', default='不適切なコンテンツが検出されました', help='ロックの理由')
+    parser.add_argument('--reason', default='Inappropriate content detected', help='ロックの理由')
     parser.add_argument('--timeout', type=int, default=300, help='タイムアウト時間（秒）')
     
     args = parser.parse_args()
