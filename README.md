@@ -51,6 +51,63 @@ This system provides intelligent monitoring and control of children's computer a
 - **Thread-safe**: Robust multi-threading architecture
 - **Comprehensive Logging**: Detailed analytics and performance tracking
 
+## MCP (Model Context Protocol) Integration
+
+This system includes a Model Context Protocol server that enables integration with AI assistants like Claude Desktop, providing remote control capabilities for the parental control system.
+
+### MCP Server Features
+
+- **Remote Unlock**: Unlock the parental control lock screen remotely
+- **System Monitoring** (Planning): Get real-time system status and information
+- **Monitoring Control** (Planning): Start and stop monitoring remotely
+- **Lock Screen Control** (Planning): Display lock screen with custom messages
+- **Standard Compliance**: Full MCP protocol compliance for Claude Desktop
+
+### MCP Server Setup
+
+#### 1. Configure Claude Desktop
+
+Add the following to your Claude Desktop MCP configuration file (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "parental-control-agent": {
+      "type": "stdio",
+      "command": "/path/to/your/venv/bin/python",
+      "args": ["/path/to/parental-control-agent/parental_control_mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "/path/to/parental-control-agent/src"
+      }
+    }
+  },
+  "toolPermissions": {
+    "parental-control-agent": true
+  }
+}
+```
+
+#### 2. Available MCP Tools
+
+- **`unlock_screen`**: Unlock the parental control lock screen
+- **`get_system_info`** (Planning): Get system information and component status
+- **`start_monitoring`** (Planning): Start the parental control monitoring system
+- **`stop_monitoring`** (Planning): Stop the monitoring system
+- **`show_lock_screen`** (Planning): Display lock screen with custom message
+- **`test_connection`** (Planning): Test MCP server connection
+
+#### 3. Usage Examples
+
+In Claude Desktop, you can use commands like:
+- "Unlock the parental control screen"
+- "Show me the system status" (Planning)
+- "Start monitoring with moderate strictness" (Planning)
+- "Display a lock screen saying 'Take a break'" (Planning)
+
+### MCP Server Files
+
+- **`parental_control_mcp_server.py`**: Full-featured MCP server with all tools
+
 ## Installation
 
 ### Prerequisites
@@ -191,6 +248,7 @@ parental-control-agent/
 │   ├── screen_capture.py         # Screen capture tools
 │   ├── gemini_multimodal.py      # AI analysis tools
 │   └── session_manager.py        # Session management
+├── parental_control_mcp_server.py # MCP server for Claude Desktop
 ├── frontend/                     # React parent dashboard
 ├── test/                         # Comprehensive test suite
 ├── doc/                          # Documentation
@@ -234,6 +292,33 @@ show_system_lock(
 unlock_system()
 ```
 
+### MCP Server Integration
+```python
+# Start MCP server for Claude Desktop integration
+python parental_control_mcp_server.py
+```
+
+#### Available MCP Tools via Claude Desktop
+```
+# Unlock the parental control screen
+unlock_screen
+
+# Get system status (Planning)
+get_system_info
+
+# Start monitoring (Planning)
+start_monitoring(age_group="middle_school", strictness_level="moderate")
+
+# Stop monitoring (Planning)
+stop_monitoring
+
+# Show custom lock screen (Planning)
+show_lock_screen(reason="Custom message", timeout=60)
+
+# Test connection (Planning)
+test_connection(message="Hello from Claude")
+```
+
 ## Troubleshooting
 
 ### Common Issues
@@ -252,6 +337,13 @@ unlock_system()
 - Verify Gemini API key is correct
 - Check internet connection
 - Ensure sufficient API quota
+
+#### MCP Server Issues
+- Ensure Python virtual environment path is correct in Claude Desktop config
+- Verify `PYTHONPATH` includes the `src` directory
+- Check that MCP dependencies are installed: `pip install mcp`
+- Restart Claude Desktop after configuration changes
+- Check Claude Desktop logs for connection errors
 
 ### Debug Mode
 ```bash
