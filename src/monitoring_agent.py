@@ -65,6 +65,13 @@ from session_manager import (
     EventRecord,
     get_global_session_manager
 )
+from websocket_server import (
+    get_websocket_server,
+    send_system_lock_notification,
+    send_approval_request,
+    send_activity_update,
+    update_system_status
+)
 
 # Configure logging
 logging.basicConfig(
@@ -191,6 +198,9 @@ class MonitoringAgent(weave.Model):
         # Store debug window reference
         object.__setattr__(self, 'debug_window', debug_window)
         
+        # WebSocket server integration
+        object.__setattr__(self, 'websocket_server', get_websocket_server())
+        
         logger.info(f"Monitoring Agent initialized for {self.config.age_group} with {self.config.strictness_level} strictness")
     
     def log_debug_entry(self, input_text: str, status: str, category: str = "unknown", 
@@ -282,6 +292,9 @@ class MonitoringAgent(weave.Model):
             
             object.__setattr__(self, 'status', MonitoringStatus.ACTIVE)
             
+            # Notify WebSocket clients that monitoring has started
+            update_system_status("monitoring", "good")
+            
             logger.info(f"Monitoring started for session: {session_id}")
             
             return {
@@ -294,6 +307,10 @@ class MonitoringAgent(weave.Model):
         except Exception as e:
             logger.error(f"Error starting monitoring: {e}")
             object.__setattr__(self, 'status', MonitoringStatus.ERROR)
+            
+            # Notify WebSocket clients of error
+            update_system_status("offline", "disconnected")
+            
             return {
                 "status": "error",
                 "error": str(e),
@@ -345,6 +362,9 @@ class MonitoringAgent(weave.Model):
             
             object.__setattr__(self, 'status', MonitoringStatus.STOPPED)
             
+            # Notify WebSocket clients that monitoring has stopped
+            update_system_status("offline", "disconnected")
+            
             session_summary = {
                 "session_id": self.session_id,
                 "total_events": self.statistics['total_events'],
@@ -373,6 +393,9 @@ class MonitoringAgent(weave.Model):
         """Main monitoring loop that runs in a separate thread"""
         logger.info("Monitoring loop started")
         
+        last_activity_update = time.time()
+        activity_update_interval = 30  # Send activity updates every 30 seconds
+        
         while not self.stop_event.is_set():
             try:
                 # Check for input completion
@@ -382,6 +405,21 @@ class MonitoringAgent(weave.Model):
                 if input_status.get('input_complete', False):
                     # Process the completed input
                     asyncio.run(self._process_input_event(input_status))
+                
+                # Send periodic activity updates
+                current_time = time.time()
+                if current_time - last_activity_update >= activity_update_interval:
+                    uptime = current_time - self.statistics.get('session_start_time', current_time).timestamp() if self.statistics.get('session_start_time') else 0
+                    
+                    send_activity_update(
+                        application_name="Parental Control Monitor",
+                        duration=int(uptime),
+                        category="System Monitoring",
+                        childId="child-001",
+                        isActive=True
+                    )
+                    
+                    last_activity_update = current_time
                 
                 # Wait before next check
                 time.sleep(self.config.monitoring_interval)
@@ -519,15 +557,39 @@ class MonitoringAgent(weave.Model):
             new_stats['judgments_made'] += 1
             object.__setattr__(self, 'statistics', new_stats)
             
-            # Step 4: Send notifications if needed
-            if self.config.enable_notifications and judgment_result.action != JudgmentAction.ALLOW:
-                await self._send_appropriate_notification(analysis_result, judgment_result)
-                event.notification_sent = True
+            # Step 4: Handle judgment results and send notifications
+            if judgment_result.action != JudgmentAction.ALLOW:
+                # Send WebSocket notifications for blocked content
+                if judgment_result.action == JudgmentAction.BLOCK:
+                    # Send system lock notification
+                    send_system_lock_notification(
+                        reason=f"Inappropriate content detected: {analysis_result.category}",
+                        applicationName="System Monitor",
+                        blockedContent=event.input_text,
+                        category=analysis_result.category,
+                        confidence=analysis_result.confidence
+                    )
+                    
+                    # Send approval request to parent dashboard
+                    request_id = f"req_{int(time.time())}_{hash(event.input_text) % 10000}"
+                    send_approval_request(
+                        request_id=request_id,
+                        reason=f"Inappropriate content detected: {analysis_result.category}",
+                        applicationName="System Monitor",
+                        blockedUrl=None,
+                        keywords=analysis_result.safety_concerns,
+                        confidence=analysis_result.confidence
+                    )
                 
-                # Update statistics
-                new_stats = dict(self.statistics)
-                new_stats['notifications_sent'] += 1
-                object.__setattr__(self, 'statistics', new_stats)
+                # Send traditional notifications if enabled
+                if self.config.enable_notifications:
+                    await self._send_appropriate_notification(analysis_result, judgment_result)
+                    event.notification_sent = True
+                    
+                    # Update statistics
+                    new_stats = dict(self.statistics)
+                    new_stats['notifications_sent'] += 1
+                    object.__setattr__(self, 'statistics', new_stats)
             
             # Step 5: Clear input buffer only after successful analysis
             context = type('MockToolContext', (), {'state': {}})()

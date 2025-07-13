@@ -44,7 +44,7 @@ export class WebSocketService {
   private shouldReconnect = true;
   private eventHandlers: Map<string, EventHandler[]> = new Map();
 
-  constructor(url: string = 'ws://localhost:8080/parent-dashboard') {
+  constructor(url: string = 'ws://localhost:8080') {
     this.url = url;
   }
 
@@ -255,7 +255,7 @@ export class WebSocketService {
 
   requestSystemStatus(): void {
     this.send({
-      type: 'REQUEST_SYSTEM_STATUS',
+      type: 'SYSTEM_STATUS_REQUEST',
       data: {}
     });
   }
