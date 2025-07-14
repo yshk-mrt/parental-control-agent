@@ -207,29 +207,6 @@ const AppContent: React.FC = () => {
               )}
             </CardContent>
           </Card>
-
-          {/* Design System Demo */}
-          <Card>
-            <CardHeader>
-              <h2 className="text-xl font-semibold">Design System</h2>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="primary">Primary</Button>
-                  <Button variant="secondary">Secondary</Button>
-                  <Button variant="destructive">Destructive</Button>
-                  <Button variant="outline">Outline</Button>
-                  <Button variant="ghost">Ghost</Button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm">Small</Button>
-                  <Button size="md">Medium</Button>
-                  <Button size="lg">Large</Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
             </div>
           </>
         )}
